@@ -47,6 +47,7 @@ type statusResp struct {
 	ChunkSize int    `json:"chunkSize"`
 	Missing   []int  `json:"missing"`
 	Complete  bool   `json:"complete"`
+	Name      string `json:"name"` // complete=true 时服务端回的真实落盘名
 	Error     string `json:"error"`
 }
 
@@ -125,8 +126,13 @@ func up(base, token, path string) {
 		}
 	}
 	buf := make([]byte, chunkSize)
+	// 服务端可能另存为 "名字 (1).ext"，也可能回一个清洗过非法字符的名字，回环都要按真实落盘名下载
+	finalName := name
 	if st.Complete {
 		fmt.Println("已存在内容指纹一致的完整文件，跳过上传")
+		if st.Name != "" {
+			finalName = st.Name
+		}
 	} else {
 		missing := st.Missing
 		fmt.Printf("上传 %s  size=%d  total=%d块  缺 %d 块\n", name, size, st.Total, len(missing))
@@ -163,8 +169,7 @@ func up(base, token, path string) {
 
 	// 2) complete 收尾（可能因并发乱序缺块而重试）
 	var sha string
-	finalName := name // 服务端可能另存为 "名字 (1).ext"，回环要按真实落盘名下载
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 3 && !st.Complete; attempt++ {
 		u := fmt.Sprintf("%s/api/upload/complete?t=%s&name=%s&size=%d",
 			base, url.QueryEscape(token), url.QueryEscape(name), size)
 		req, _ := http.NewRequest(http.MethodPost, u, bytes.NewReader(nil))
@@ -214,18 +219,22 @@ func up(base, token, path string) {
 	}
 
 	local := shaFile(path)
-	fmt.Println("服务端 sha256:", sha)
 	fmt.Println("本地   sha256:", local)
-	if !strings.EqualFold(sha, local) {
-		fmt.Println("SHA 不一致 ✗")
-		os.Exit(2)
+	if sha != "" {
+		fmt.Println("服务端 sha256:", sha)
+		if !strings.EqualFold(sha, local) {
+			fmt.Println("SHA 不一致 ✗")
+			os.Exit(2)
+		}
+		fmt.Println("SHA 一致 ✓")
+	} else {
+		fmt.Println("（指纹一致未重传，服务端 sha 未知 —— 靠下面的下载回环比对）")
 	}
-	fmt.Println("SHA 一致 ✓")
 
 	// 3) 下载回环校验
 	out := path + ".roundtrip"
 	if finalName != name {
-		fmt.Println("服务端未覆盖同名文件，另存为:", finalName)
+		fmt.Println("服务端落盘名与请求名不同，实际为:", finalName)
 	}
 	down(base, finalName, out)
 	rt := shaFile(out)
