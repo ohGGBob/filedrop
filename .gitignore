@@ -7,6 +7,8 @@
 # 运行时数据
 received/
 filedrop-config.json
+filedrop-notes.json
+filedrop-notes.json.tmp
 
 # 自测生成的大文件
 *.bin

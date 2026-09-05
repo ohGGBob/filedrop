@@ -51,11 +51,38 @@ async function loadInfo() {
   } catch (_) {}
   addrEl.textContent = '（无法获取，请检查服务）';
 }
-copyBtn.addEventListener('click', () => {
-  navigator.clipboard?.writeText(addrEl.textContent).then(
-    () => { const t = copyBtn.textContent; copyBtn.textContent = '已复制'; setTimeout(() => (copyBtn.textContent = t), 1200); },
-    () => {}
-  );
+// copyText 复制一段文本。navigator.clipboard 只在安全上下文存在，而本项目跑在
+// 局域网 http://192.168.x.x 上——手机上它就是 undefined，之前点「复制」没任何反应。
+// 因此保留 execCommand('copy') 兜底（明文源上依然可用）。
+async function copyText(s) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch (_) { /* 落到兜底路径 */ }
+  const ta = document.createElement('textarea');
+  ta.value = s;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.top = '-1000px';
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, s.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+function flashCopied(btn, ok) {
+  const t = btn.textContent;
+  btn.textContent = ok ? '已复制' : '复制失败';
+  setTimeout(() => (btn.textContent = t), 1200);
+}
+
+copyBtn.addEventListener('click', async () => {
+  flashCopied(copyBtn, await copyText(addrEl.textContent));
 });
 
 // ---- 文件列表 ----
@@ -183,7 +210,13 @@ function renderTask(t) {
     const renamed = t.finalName && t.finalName !== t.name ? ' · 已存为 ' + t.finalName : '';
     t.text.textContent = '完成 ✓' + (t.reused ? '（本机已有相同内容，未重复保存）' : '') + renamed;
   } else if (t.status === 'failed') t.text.textContent = '失败：' + t.err;
-  else if (t.status === 'cancelled') t.text.textContent = '已取消（' + t.sent + '/' + t.total + ' 块已在电脑端，可续传）';
+  else if (t.status === 'cancelled') {
+    // 取消可能正好赶在最后一个分块发完、收尾请求发出之前：此时电脑端其实已经
+    // 有全部字节，说「半截数据可续传」会让人以为还得再传一遍。
+    t.text.textContent = t.sent >= t.total
+      ? '已取消（' + t.total + ' 块其实都已到电脑端，点「续传」直接收尾）'
+      : '已取消（' + t.sent + '/' + t.total + ' 块已在电脑端，可续传）';
+  }
 }
 
 function renderTotals() {
@@ -416,8 +449,119 @@ fileListEl.addEventListener('click', async (e) => {
   }
 });
 
+// ---- 传文字（剪贴板快传）----
+// 正文一律走 textContent：便签里可能就是别人贴来的一段 HTML / 脚本，
+// 用 innerHTML 渲染等于把「谁发了一条文字」变成「谁在你的页面上执行代码」。
+const noteInput = $('noteInput'), noteList = $('noteList'), noteStatus = $('noteStatus');
+const noteSendBtn = $('noteSend');
+let notes = [];
+
+function setNoteStatus(t) { if (noteStatus) noteStatus.textContent = t; }
+
+function fmtWhen(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  const sameDay = new Date().toDateString() === d.toDateString();
+  return sameDay ? p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+    : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function renderNotes() {
+  if (!noteList) return;
+  noteList.textContent = '';
+  if (!notes.length) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = '还没有便签';
+    noteList.appendChild(e);
+    return;
+  }
+  for (const n of notes) {
+    const box = document.createElement('div'); box.className = 'note';
+    const head = document.createElement('div'); head.className = 'nhead';
+    const when = document.createElement('span'); when.textContent = fmtWhen(n.at);
+    const size = document.createElement('span'); size.textContent = (n.size || n.text.length) + ' 字节 · ' + n.text.split('\n').length + ' 行';
+    const spacer = document.createElement('span'); spacer.className = 'spacer';
+    const copy = document.createElement('button'); copy.className = 'nact'; copy.textContent = '复制';
+    copy.addEventListener('click', async () => {
+      const ok = await copyText(n.text);
+      flashCopied(copy, ok);
+      setNoteStatus(ok ? '已复制到剪贴板' : '复制失败：请长按正文手动选中');
+    });
+    const del = document.createElement('button'); del.className = 'nact danger'; del.textContent = '删除';
+    del.addEventListener('click', () => deleteNote(n.id));
+    head.append(when, size, spacer, copy, del);
+    const body = document.createElement('pre'); body.className = 'nbody'; body.textContent = n.text;
+    box.append(head, body);
+    noteList.appendChild(box);
+  }
+}
+
+async function loadNotes() {
+  if (!noteList) return;
+  try {
+    const r = await fetch('/api/notes?t=' + encodeURIComponent(token));
+    if (r.status === 403) { notes = []; setNoteStatus(''); renderNotesAsDenied(); return; }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    notes = await r.json();
+    renderNotes();
+  } catch (e) {
+    notes = [];
+    const e2 = document.createElement('div'); e2.className = 'empty';
+    e2.textContent = '便签读取失败：' + e;
+    noteList.textContent = '';
+    noteList.appendChild(e2);
+  }
+}
+
+function renderNotesAsDenied() {
+  const e = document.createElement('div');
+  e.className = 'empty';
+  e.textContent = '便签需要配对令牌才能读写：请用电脑上显示的「带令牌地址」打开本页。';
+  noteList.textContent = '';
+  noteList.appendChild(e);
+}
+
+async function sendNote() {
+  const text = noteInput.value;
+  if (!text.trim()) { setNoteStatus('先写点内容'); return; }
+  if (!token && !isLocal) { setNoteStatus('当前页面没有上传令牌，无法发送'); return; }
+  setNoteStatus('发送中…');
+  try {
+    const r = await fetch('/api/notes?t=' + encodeURIComponent(token), {
+      method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: text,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    noteInput.value = '';
+    setNoteStatus('已发送');
+    await loadNotes();
+    setTimeout(() => setNoteStatus(''), 2000);
+  } catch (e) {
+    setNoteStatus('发送失败：' + e);
+  }
+}
+
+async function deleteNote(id) {
+  try {
+    const r = await fetch('/api/notes?t=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(id), { method: 'DELETE' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    await loadNotes();
+  } catch (e) {
+    setNoteStatus('删除失败：' + e);
+  }
+}
+
+if (noteSendBtn) {
+  noteSendBtn.addEventListener('click', sendNote);
+  noteInput.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendNote(); }
+  });
+}
+
 // ---- SSE 实时刷新（任一设备完成上传 / 删除 / 改名，所有页面同步列表） ----
 let filesRefreshTimer = null;
+let notesRefreshTimer = null;
 function listenEvents() {
   try {
     const es = new EventSource('/api/events');
@@ -427,6 +571,9 @@ function listenEvents() {
         if (j.type === 'files') {
           clearTimeout(filesRefreshTimer);
           filesRefreshTimer = setTimeout(loadFiles, 200);
+        } else if (j.type === 'notes') {
+          clearTimeout(notesRefreshTimer);
+          notesRefreshTimer = setTimeout(loadNotes, 200);
         }
       } catch (_) {}
     };
@@ -542,4 +689,5 @@ loadInfo();
 loadFiles();
 loadPartials();
 loadSettings();
+loadNotes();
 listenEvents();

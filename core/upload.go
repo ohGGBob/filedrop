@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-// 上传协议 v0.2：
+// 上传协议 v0.4：
 //  1. 客户端 GET /api/upload/status 取得缺块列表（依据位图精确断点续传）；
+//     查询带上取样指纹 &fp=<16hex>，服务端只有指纹也对得上才敢直接判 complete；
 //  2. 客户端并发 POST /api/upload/chunk，服务端按 index*chunkSize WriteAt 落盘并记位；
 //  3. 全部完成后 POST /api/upload/complete，服务端校验大小、算 SHA-256、重命名落盘。
 //

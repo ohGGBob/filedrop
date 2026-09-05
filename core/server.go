@@ -31,7 +31,7 @@ import (
 var webFS embed.FS
 
 // Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘。
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // Server 是一个 FileDrop 实例。
 type Server struct {
@@ -48,6 +48,10 @@ type Server struct {
 	ip    string
 	hub   *eventHub
 	mu    sync.Mutex // 保护上传落盘 / 重命名 / 文件管理
+
+	// notesMu 单独保护便签文件。它和 s.mu 管的是互不相干的东西，
+	// 分开放就不会出现「写一段便签要等某个 GB 级分块落盘」。
+	notesMu sync.Mutex
 }
 
 // New 创建实例并生成配对令牌；接收目录不可写时自动回退到用户目录下的 FileDrop。
@@ -143,6 +147,8 @@ func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		s.uploadComplete(w, r)
 	case "/api/uploads":
 		s.partialsHandler(w, r)
+	case "/api/notes":
+		s.notesHandler(w, r)
 	case "/api/download":
 		s.download(w, r)
 	case "/api/events":

@@ -19,9 +19,10 @@ type Config struct {
 	Dir string `json:"dir"`
 }
 
-// configPath 返回配置文件路径：与可执行文件同级，保证「便携版」拷贝目录即走。
-func configPath() string {
-	name := "filedrop-config.json"
+// dataPath 返回随 exe 一起存放的数据文件路径：便携版拷走目录即带走全部状态。
+// 便签刻意放在接收目录之外——否则它会混进 /api/files 的下载列表，
+// 还会被「删除文件」之类的操作误伤。
+func dataPath(name string) string {
 	if exe, err := os.Executable(); err == nil {
 		if d := filepath.Dir(exe); d != "" {
 			return filepath.Join(d, name)
@@ -29,6 +30,9 @@ func configPath() string {
 	}
 	return name
 }
+
+// configPath 返回配置文件路径：与可执行文件同级，保证「便携版」拷贝目录即走。
+func configPath() string { return dataPath("filedrop-config.json") }
 
 func loadConfig() (Config, error) {
 	b, err := os.ReadFile(configPath())
