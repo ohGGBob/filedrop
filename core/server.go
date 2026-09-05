@@ -14,6 +14,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -35,8 +36,13 @@ const Version = "0.3.0"
 // Server 是一个 FileDrop 实例。
 type Server struct {
 	Port   int
-	Dir    string
 	NoAuth bool
+
+	// dir 受 dirMu 保护，只能通过 Dir() / setDir() 访问。
+	// 目录会被「设置」接口随时改写，而列表 / 下载 / 托盘菜单同时在读，
+	// 直接用公开字段就是数据竞争（-race 下可见）。
+	dirMu sync.RWMutex
+	dir   string
 
 	token string
 	ip    string
@@ -50,6 +56,9 @@ func New(port int, dir string, noAuth bool) *Server {
 	if cfg, err := loadConfig(); err == nil && strings.TrimSpace(cfg.Dir) != "" {
 		dir = cfg.Dir
 	}
+	if abs, e := filepath.Abs(dir); e == nil {
+		dir = abs
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		if home, e := os.UserHomeDir(); e == nil {
 			alt := filepath.Join(home, "FileDrop")
@@ -58,11 +67,26 @@ func New(port int, dir string, noAuth bool) *Server {
 			}
 		}
 	}
-	srv := &Server{Port: port, Dir: dir, NoAuth: noAuth, token: randHex(16), ip: lanIP(), hub: newEventHub()}
-	if abs, e := filepath.Abs(dir); e == nil {
-		srv.Dir = abs
-	}
-	return srv
+	return &Server{Port: port, dir: dir, NoAuth: noAuth, token: randHex(16), ip: lanIP(), hub: newEventHub()}
+}
+
+// Dir 返回当前接收目录的快照。
+//
+// dirMu 是叶子锁：它内部绝不获取 s.mu，因此上传处理函数可以在持有 s.mu 时安全调用
+// （锁序恒为 s.mu → dirMu，不会倒置死锁）。
+// 单次操作应在开头取一次快照并全程使用——中途被切目录会让同一次上传的
+// .part 与位图落到两个目录里。
+func (s *Server) Dir() string {
+	s.dirMu.RLock()
+	defer s.dirMu.RUnlock()
+	return s.dir
+}
+
+// setDir 切换接收目录；调用方需保证目录已创建且可写。
+func (s *Server) setDir(d string) {
+	s.dirMu.Lock()
+	s.dir = d
+	s.dirMu.Unlock()
 }
 
 // Token 返回本次运行生成的配对令牌。
@@ -188,7 +212,8 @@ func isLoopback(r *http.Request) bool {
 
 // ---------- 接口实现 ----------
 func (s *Server) listFiles(w http.ResponseWriter) {
-	entries, err := os.ReadDir(s.Dir)
+	dir := s.Dir()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "read dir")
 		return
@@ -204,7 +229,7 @@ func (s *Server) listFiles(w http.ResponseWriter) {
 			continue
 		}
 		rec := map[string]any{"name": e.Name(), "size": fi.Size(), "mtime": fi.ModTime().UnixMilli()}
-		if b, err := os.ReadFile(filepath.Join(s.Dir, e.Name()) + ".sha256"); err == nil {
+		if b, err := os.ReadFile(filepath.Join(dir, e.Name()) + ".sha256"); err == nil {
 			rec["sha256"] = strings.TrimSpace(string(b))
 		}
 		out = append(out, rec)
@@ -229,12 +254,12 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 	name := safeName(r.URL.Query().Get("name"))
 	if name == "" {
-		jsonErr(w, http.StatusBadRequest, "bad name")
+		badName(w)
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := filepath.Join(s.Dir, name)
+	p := filepath.Join(s.Dir(), name)
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		jsonErr(w, http.StatusInternalServerError, "remove")
 		return
@@ -264,14 +289,18 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	old, nn := safeName(body.Name), safeName(body.NewName)
-	if old == "" || nn == "" || old == nn {
-		jsonErr(w, http.StatusBadRequest, "bad name")
+	if old == "" || nn == "" {
+		badName(w)
+		return
+	}
+	if old == nn {
+		jsonErr(w, http.StatusBadRequest, "新文件名与原文件名相同")
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	from := filepath.Join(s.Dir, old)
-	to := filepath.Join(s.Dir, nn)
+	from := filepath.Join(s.Dir(), old)
+	to := filepath.Join(s.Dir(), nn)
 	if _, err := os.Stat(from); err != nil {
 		jsonErr(w, http.StatusNotFound, "not found")
 		return
@@ -294,10 +323,10 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	name := safeName(r.URL.Query().Get("name"))
 	if name == "" {
-		http.Error(w, "bad name", http.StatusBadRequest)
+		http.Error(w, "invalid file name", http.StatusBadRequest)
 		return
 	}
-	final := filepath.Join(s.Dir, name)
+	final := filepath.Join(s.Dir(), name)
 	f, err := os.Open(final)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -315,7 +344,8 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 }
 
 // contentDisposition 生成 RFC 6266 的 Content-Disposition 值：
-//   attachment; filename="<ascii 兜底>"; filename*=UTF-8''<百分号编码>
+//
+//	attachment; filename="<ascii 兜底>"; filename*=UTF-8''<百分号编码>
 //
 // 中文文件名如果只写 filename="中文.mp4"，安卓/iOS 浏览器会拿到乱码，
 // 必须同时给出 ASCII 兜底名与 filename* 的 UTF-8 编码形式。
@@ -352,9 +382,33 @@ func contentDisposition(name string) string {
 	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, ascii, enc.String())
 }
 
+// ownURL 判断 text 是否是一个指向本机的 http(s) 地址。
+// 二维码接口只接受这种输入（见 qrHandler 的注释）。
+func (s *Server) ownURL(text string) bool {
+	u, err := url.Parse(text)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || h == s.ip
+}
+
 func (s *Server) qrHandler(w http.ResponseWriter, r *http.Request) {
-	text := r.URL.Query().Get("text")
-	if text == "" {
+	// 早期版本把 ?text= 里的任意字符串直接编成二维码，且不限长度——
+	// 同网任何人拿它当免费的钓鱼二维码生成器（扫一下就跳到外站），
+	// 超长文本还能白白消耗编码开销。现在只允许指向本机的地址，其余回退到连接地址。
+	text := strings.TrimSpace(r.URL.Query().Get("text"))
+	if text == "" || len(text) > 512 || !s.ownURL(text) {
 		text = s.URL()
 	}
 	size := 256
@@ -397,14 +451,56 @@ func shaOf(path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// maxNameBytes 限制文件名长度：落盘时还要追加 <size>.part 与 .bits 后缀，
+// 而 NTFS 单个路径成分上限是 255。超长的名字与其在底层 CreateFile 撞出一个
+// 看不懂的 500，不如在入口就说清楚。
+const maxNameBytes = 200
+
+// winReserved 是 Windows 保留设备名（不含 COM10+ / LPT10+，现代系统不保留）。
+var winReserved = map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true, "CLOCK$": true}
+
+// safeName 把客户端给的任意字符串收敛成一个安全的纯文件名，返回 "" 表示不可用。
+//
+// 四道关卡，缺一不可：
+//  1. 只取 basename 并剔掉分隔符，挡掉 ../../etc/passwd 式穿越。注意
+//     filepath.Base("..") 返回的仍是 ".."，必须显式拒绝，否则
+//     filepath.Join(dir, "..") 直接指到接收目录的上一级去。
+//  2. 拒绝 Windows 保留设备名：打开 dir\NUL 会成功并读出无限零字节，
+//     下载处理函数就此卡死、白占一个连接（CON / COM1 / nul.txt 同理）。
+//  3. 拒绝结尾的点与空格——NTFS 根本建不出这样的文件。
+//  4. 限制长度。
 func safeName(s string) string {
 	s = filepath.Base(s)
 	s = strings.ReplaceAll(s, "/", "")
 	s = strings.ReplaceAll(s, "\\", "")
-	if s == "." || s == "" {
+	if s == "." || s == ".." || s == "" {
 		return ""
 	}
+	if strings.HasSuffix(s, ".") || strings.HasSuffix(s, " ") {
+		return ""
+	}
+	if len(s) > maxNameBytes {
+		return ""
+	}
+	stem := s // 设备名看第一个点之前的部分："nul.txt" 在 Windows 上同样是设备
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	stem = strings.ToUpper(stem)
+	if winReserved[stem] {
+		return ""
+	}
+	if (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && len(stem) == 4 {
+		if d := stem[3]; d >= '1' && d <= '9' {
+			return ""
+		}
+	}
 	return s
+}
+
+// badName 统一「文件名不可用」的响应文案，供各写接口复用。
+func badName(w http.ResponseWriter) {
+	jsonErr(w, http.StatusBadRequest, "文件名无效：不能为空或 ..，不能用 Windows 保留名（NUL/CON/COM1 等），不能以点或空格结尾")
 }
 
 func randHex(n int) string {
@@ -421,21 +517,23 @@ func lanIP() string {
 	candidates := make([]string, 0)
 	for _, a := range addrs {
 		ipnet, ok := a.(*net.IPNet)
-		if !ok || ipnet.IP.IsLoopback() {
+		if !ok {
 			continue
 		}
 		ip4 := ipnet.IP.To4()
-		if ip4 == nil {
+		if ip4 == nil || ip4.IsLoopback() {
 			continue
 		}
-		ip := ip4.String()
-		if strings.HasPrefix(ip, "169.254.") {
+		if ip4.IsLinkLocalUnicast() { // 169.254.x 是 DHCP 拿不到地址时的废地址
 			continue
 		}
-		if strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "172.") {
-			return ip
+		// 必须用 IsPrivate：它按 CIDR 判定 10/8、172.16/12、192.168/16。
+		// 手写 HasPrefix(ip, "172.") 会把公网的 172.5.6.7 也当成局域网地址，
+		// 生成的二维码就把手机指向一个访问不通的地址。
+		if ip4.IsPrivate() {
+			return ip4.String()
 		}
-		candidates = append(candidates, ip)
+		candidates = append(candidates, ip4.String())
 	}
 	if len(candidates) > 0 {
 		return candidates[0]

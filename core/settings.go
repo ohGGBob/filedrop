@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -50,6 +51,12 @@ func saveConfig(c Config) error {
 }
 
 // SetDir 切换接收目录：建目录、校验可写、立即生效并写入配置。
+//
+// 有未完成的上传时拒绝切换。原因不是洁癖：分块请求各自按当时的目录拼 .part 路径，
+// 切目录会把一次上传的 .part 与位图劈到两个目录下，而「中断的传输」面板只扫当前
+// 目录——旧目录里那几 GB 残留就此变成看不见也清不掉的孤儿。
+// 检查与赋值都放在 s.mu 内：每个分块落盘都持着这把锁，所以持锁扫描到「没有 .part」
+// 再切换，中间不会插进新的分块。
 func (s *Server) SetDir(dir string) error {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
@@ -71,8 +78,14 @@ func (s *Server) SetDir(dir string) error {
 	_ = os.Remove(probe)
 
 	s.mu.Lock()
-	s.Dir = abs
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if abs == s.Dir() {
+		return saveConfig(Config{Dir: abs}) // 切回当前目录：只记住，不动别的
+	}
+	if left := len(scanPartialsIn(s.Dir())); left > 0 {
+		return fmt.Errorf("还有 %d 个未传完的文件，请先在「中断的传输」里续传或清理，再切换接收目录", left)
+	}
+	s.setDir(abs)
 	return saveConfig(Config{Dir: abs})
 }
 
@@ -96,7 +109,7 @@ func (s *Server) settingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		s.hub.broadcast(map[string]any{"type": "files"})
 	}
-	jsonOK(w, map[string]any{"dir": s.Dir, "config": configPath()})
+	jsonOK(w, map[string]any{"dir": s.Dir(), "config": configPath()})
 }
 
 // openFolderHandler 在 Windows 资源管理器里打开接收目录。
@@ -105,9 +118,7 @@ func (s *Server) openFolderHandler(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusForbidden, "token required")
 		return
 	}
-	s.mu.Lock()
-	d := s.Dir
-	s.mu.Unlock()
+	d := s.Dir()
 	switch runtime.GOOS {
 	case "windows":
 		_ = exec.Command("explorer", d).Start()

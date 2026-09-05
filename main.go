@@ -30,7 +30,7 @@ func main() {
 	}
 	fmt.Println("FileDrop 已启动  v" + core.Version)
 	fmt.Println("  本机连接地址: " + srv.URL())
-	fmt.Println("  接收目录:     " + filepath.Clean(srv.Dir))
+	fmt.Println("  接收目录:     " + filepath.Clean(srv.Dir()))
 	fmt.Println("  按 Ctrl+C 停止")
 
 	if err := srv.ListenAndServe(); err != nil {

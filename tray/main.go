@@ -71,7 +71,7 @@ func onReady(srv *core.Server) {
 			case <-mCopy.ClickedCh:
 				copyToClipboard(srv.URL())
 			case <-mFolder.ClickedCh:
-				openFolder(srv.Dir)
+				openFolder(srv.Dir())
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return

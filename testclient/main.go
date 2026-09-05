@@ -1,7 +1,8 @@
 // fdtest —— FileDrop 自测客户端（实现与前端相同的 v0.2 分块协议）
 // 用法:
-//   go run ./testclient up   <base> <token> <file>
-//   go run ./testclient down <base> <name> <out>
+//
+//	go run ./testclient up   <base> <token> <file>
+//	go run ./testclient down <base> <name> <out>
 package main
 
 import (
@@ -118,6 +119,7 @@ func up(base, token, path string) {
 
 	// 2) complete 收尾（可能因并发乱序缺块而重试）
 	var sha string
+	finalName := name // 服务端可能另存为 "名字 (1).ext"，回环要按真实落盘名下载
 	for attempt := 0; attempt < 3; attempt++ {
 		u := fmt.Sprintf("%s/api/upload/complete?t=%s&name=%s&size=%d",
 			base, url.QueryEscape(token), url.QueryEscape(name), size)
@@ -132,6 +134,9 @@ func up(base, token, path string) {
 		_ = json.Unmarshal(body, &m)
 		if resp.StatusCode == 200 {
 			sha, _ = m["sha256"].(string)
+			if nn, ok := m["name"].(string); ok && nn != "" {
+				finalName = nn
+			}
 			break
 		}
 		if mm, ok := m["missing"].([]any); ok && len(mm) > 0 {
@@ -175,7 +180,10 @@ func up(base, token, path string) {
 
 	// 3) 下载回环校验
 	out := path + ".roundtrip"
-	down(base, name, out)
+	if finalName != name {
+		fmt.Println("服务端未覆盖同名文件，另存为:", finalName)
+	}
+	down(base, finalName, out)
 	rt := shaFile(out)
 	fmt.Println("回环   sha256:", rt)
 	if strings.EqualFold(rt, local) {

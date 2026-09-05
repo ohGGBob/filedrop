@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // 上传协议 v0.2：
@@ -93,16 +94,21 @@ func contigReceived(bits []byte, size int64) int64 {
 func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 	name := safeName(r.URL.Query().Get("name"))
 	size, err := strconv.ParseInt(r.URL.Query().Get("size"), 10, 64)
-	if name == "" || err != nil || size <= 0 {
+	if name == "" {
+		badName(w)
+		return
+	}
+	if err != nil || size <= 0 {
 		jsonErr(w, http.StatusBadRequest, "bad params")
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	dir := s.Dir()
 
 	// 同名完整文件已存在 → 直接判定完成
-	if fi, e := os.Stat(filepath.Join(s.Dir, name)); e == nil && fi.Size() == size {
+	if fi, e := os.Stat(filepath.Join(dir, name)); e == nil && fi.Size() == size {
 		jsonOK(w, map[string]any{
 			"received": size, "total": chunkCount(size), "chunkSize": chunkSize,
 			"missing": []int{}, "complete": true,
@@ -110,7 +116,7 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bits := loadBitmap(s.Dir, name, size)
+	bits := loadBitmap(dir, name, size)
 	jsonOK(w, map[string]any{
 		"received":  contigReceived(bits, size),
 		"total":     chunkCount(size),
@@ -131,7 +137,11 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusForbidden, "token required")
 		return
 	}
-	if name == "" || sErr != nil || iErr != nil || size <= 0 {
+	if name == "" {
+		badName(w)
+		return
+	}
+	if sErr != nil || iErr != nil || size <= 0 {
 		jsonErr(w, http.StatusBadRequest, "bad params")
 		return
 	}
@@ -157,9 +167,10 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	dir := s.Dir()
 
-	bits := loadBitmap(s.Dir, name, size)
-	f, err := os.OpenFile(partPath(s.Dir, name, size), os.O_RDWR|os.O_CREATE, 0o644)
+	bits := loadBitmap(dir, name, size)
+	f, err := os.OpenFile(partPath(dir, name, size), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "open part")
 		return
@@ -172,11 +183,56 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 	_ = f.Close()
 
 	bits[index] = 1
-	if err := writeBitmap(s.Dir, name, size, bits); err != nil {
+	if err := writeBitmap(dir, name, size, bits); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "write bitmap")
 		return
 	}
 	jsonOK(w, map[string]any{"ok": true})
+}
+
+// sidecarSha 读取 <文件>.sha256 清单；不存在返回 ""。
+func sidecarSha(path string) string {
+	b, err := os.ReadFile(path + ".sha256")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// uniqueTarget 为落盘挑一个不会毁掉已有文件的目标名。
+//
+// 直接 os.Rename 覆盖会让「同名但内容不同」的上一个文件无声消失——而手机端
+// 通常并没有第二份备份，用户只会以为文件传丢了。规则：
+//   - size 与 sha256 都与旧文件一致 → 是同一份内容的重传，复用旧文件，
+//     新传的那份 .part 由调用方删除（reused=true）；
+//   - 内容不同 → 另存为 "名字 (1).ext"、"名字 (2).ext"…两份都留着。
+//
+// 优先读 .sha256 清单而不是当场重算，避免为一个 4GB 旧文件在收尾阶段多花十几秒。
+func uniqueTarget(dir, name, sum string, size int64) (path, finalName string, reused bool) {
+	p := filepath.Join(dir, name)
+	fi, err := os.Stat(p)
+	if err != nil {
+		return p, name, false // 目录里没有同名文件，正常落盘
+	}
+	if fi.Size() == size {
+		old := sidecarSha(p)
+		if old == "" {
+			old = shaOf(p)
+		}
+		if old == sum {
+			return p, name, true
+		}
+	}
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for i := 1; i <= 999; i++ {
+		cand := fmt.Sprintf("%s (%d)%s", stem, i, ext)
+		if _, e := os.Stat(filepath.Join(dir, cand)); e != nil {
+			return filepath.Join(dir, cand), cand, false
+		}
+	}
+	cand := fmt.Sprintf("%s (%d)%s", stem, time.Now().Unix(), ext)
+	return filepath.Join(dir, cand), cand, false
 }
 
 // uploadComplete 校验全部缺块已补足、算 SHA-256、重命名落盘并清位图。
@@ -188,15 +244,20 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusForbidden, "token required")
 		return
 	}
-	if name == "" || sErr != nil || size <= 0 {
+	if name == "" {
+		badName(w)
+		return
+	}
+	if sErr != nil || size <= 0 {
 		jsonErr(w, http.StatusBadRequest, "bad params")
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	dir := s.Dir()
 
-	bits := loadBitmap(s.Dir, name, size)
+	bits := loadBitmap(dir, name, size)
 	if missing := missingChunks(bits); len(missing) > 0 {
 		jsonErrCode(w, http.StatusBadRequest, map[string]any{
 			"error": "incomplete", "missing": missing, "received": contigReceived(bits, size),
@@ -204,7 +265,7 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	part := partPath(s.Dir, name, size)
+	part := partPath(dir, name, size)
 	// 规整到精确大小（末块可能与 8MiB 不对齐 / 稀疏写入造成的超长）
 	if fi, err := os.Stat(part); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "stat part")
@@ -224,16 +285,22 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "hash failed")
 		return
 	}
-	final := filepath.Join(s.Dir, name)
-	if err := os.Rename(part, final); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "rename")
-		return
+	final, finalName, reused := uniqueTarget(dir, name, sum, size)
+	if reused {
+		// 内容完全一样：留旧删新，别把几 GB 的重复数据留在盘上
+		_ = os.Remove(part)
+		_ = os.Remove(bitsPath(dir, name, size))
+	} else {
+		if err := os.Rename(part, final); err != nil {
+			jsonErr(w, http.StatusInternalServerError, "rename")
+			return
+		}
+		_ = os.WriteFile(final+".sha256", []byte(sum), 0o644)
+		_ = os.Remove(bitsPath(dir, name, size))
 	}
-	_ = os.WriteFile(final+".sha256", []byte(sum), 0o644)
-	_ = os.Remove(bitsPath(s.Dir, name, size))
 
 	s.hub.broadcast(map[string]any{"type": "files"})
-	jsonOK(w, map[string]any{"sha256": sum})
+	jsonOK(w, map[string]any{"sha256": sum, "name": finalName, "reused": reused})
 }
 
 // ---------- 中断残留 ----------
@@ -260,12 +327,14 @@ func (s *Server) partialsHandler(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, s.scanPartials())
 }
 
-// scanPartials 扫描接收目录里所有中断的上传残留（按修改时间倒序）。
+// scanPartials 列出接收目录里所有中断的上传残留。
 func (s *Server) scanPartials() []map[string]any {
-	s.mu.Lock()
-	dir := s.Dir
-	s.mu.Unlock()
+	return scanPartialsIn(s.Dir())
+}
 
+// scanPartialsIn 在指定目录里扫描中断的上传残留（按修改时间倒序）。
+// 不碰 s.mu，因此已持锁的调用方（如切目录前的检查）可直接复用。
+func scanPartialsIn(dir string) []map[string]any {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return []map[string]any{}
@@ -321,7 +390,8 @@ func (s *Server) purgePartials(name string) (int, error) {
 // purgePartialsLocked 是 purgePartials 的无锁版本，供已持锁的调用方（如删除文件）复用，
 // 避免同一个 sync.Mutex 重入导致死锁。
 func (s *Server) purgePartialsLocked(name string) (int, error) {
-	entries, err := os.ReadDir(s.Dir)
+	dir := s.Dir()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0, err
 	}
@@ -339,10 +409,10 @@ func (s *Server) purgePartialsLocked(name string) (int, error) {
 		if name != "" && owner != name {
 			continue
 		}
-		if err := os.Remove(filepath.Join(s.Dir, e.Name())); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !os.IsNotExist(err) {
 			return removed, err
 		}
-		_ = os.Remove(filepath.Join(s.Dir, e.Name()+".bits"))
+		_ = os.Remove(filepath.Join(dir, e.Name()+".bits"))
 		removed++
 	}
 	return removed, nil
