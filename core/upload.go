@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -161,7 +162,7 @@ func contigReceived(bits []byte, size int64) int64 {
 
 // uploadStatus 返回断点续传所需的缺块信息。
 func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
-	name := safeName(r.URL.Query().Get("name"))
+	name := safeRelPath(r.URL.Query().Get("name"))
 	size, err := strconv.ParseInt(r.URL.Query().Get("size"), 10, 64)
 	if name == "" {
 		badName(w)
@@ -189,6 +190,14 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// 同名同大小但内容对不上：告诉前端有冲突，由用户决定跳过 / 覆盖 / 共存。
+		// 服务端默认继续走位图（等价于"共存"），complete 里同名不同内容会自动改名。
+		jsonOK(w, map[string]any{
+			"received": 0, "total": chunkCount(size), "chunkSize": chunkSize,
+			"missing": missingChunks(loadBitmap(dir, name, size)),
+			"complete": false, "exists": true, "name": name,
+		})
+		return
 	}
 
 	bits := loadBitmap(dir, name, size)
@@ -204,7 +213,7 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 // uploadChunk 写入单个分块，不做落盘收尾（收尾在 complete）。
 func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	name := safeName(q.Get("name"))
+	name := safeRelPath(q.Get("name"))
 	size, sErr := strconv.ParseInt(q.Get("size"), 10, 64)
 	index, iErr := strconv.Atoi(q.Get("index"))
 
@@ -243,6 +252,12 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dir := s.Dir()
+
+	// 文件夹上传的 name 带子路径（"相册/IMG_1.jpg"），先确保子目录存在
+	if err := os.MkdirAll(filepath.Dir(partPath(dir, name, size)), 0o755); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "mkdir")
+		return
+	}
 
 	bits := loadBitmap(dir, name, size)
 	f, err := os.OpenFile(partPath(dir, name, size), os.O_RDWR|os.O_CREATE, 0o644)
@@ -311,9 +326,11 @@ func uniqueTarget(dir, name, sum string, size int64) (path, finalName string, re
 }
 
 // uploadComplete 校验全部缺块已补足、算 SHA-256、重命名落盘并清位图。
+// mode=overwrite 时先删除同名旧文件（含清单）再落盘，实现「覆盖」语义；
+// 缺省时同名不同内容的文件自动改名共存。
 func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	name := safeName(q.Get("name"))
+	name := safeRelPath(q.Get("name"))
 	size, sErr := strconv.ParseInt(q.Get("size"), 10, 64)
 	if !s.canWrite(r) {
 		jsonErr(w, http.StatusForbidden, "token required")
@@ -340,6 +357,18 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 覆盖模式：把同名旧文件连同清单一起清掉，下面的 uniqueTarget 就会直接用原名
+	if q.Get("mode") == "overwrite" {
+		old := filepath.Join(dir, name)
+		if _, err := os.Stat(old); err == nil {
+			if err := os.Remove(old); err != nil {
+				jsonErr(w, http.StatusInternalServerError, "overwrite remove old: "+err.Error())
+				return
+			}
+			_ = os.Remove(old + ".sha256")
+		}
+	}
+
 	part := partPath(dir, name, size)
 	// 规整到精确大小（末块可能与 8MiB 不对齐 / 稀疏写入造成的超长）
 	if fi, err := os.Stat(part); err != nil {
@@ -358,6 +387,11 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 	sum := shaOf(part)
 	if sum == "" {
 		jsonErr(w, http.StatusInternalServerError, "hash failed")
+		return
+	}
+	// 共存落盘时目标可能在子目录里，确保目录已存在
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "mkdir")
 		return
 	}
 	final, finalName, reused := uniqueTarget(dir, name, sum, size)
@@ -407,35 +441,37 @@ func (s *Server) scanPartials() []map[string]any {
 	return scanPartialsIn(s.Dir())
 }
 
-// scanPartialsIn 在指定目录里扫描中断的上传残留（按修改时间倒序）。
+// scanPartialsIn 在指定目录里递归扫描中断的上传残留（按修改时间倒序）。
 // 不碰 s.mu，因此已持锁的调用方（如切目录前的检查）可直接复用。
 func scanPartialsIn(dir string) []map[string]any {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return []map[string]any{}
-	}
-	out := make([]map[string]any, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	out := make([]map[string]any, 0, 8)
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
 		}
-		n := e.Name()
+		n := d.Name()
 		if !strings.HasSuffix(n, ".part") {
-			continue
+			return nil
 		}
-		base := strings.TrimSuffix(n, ".part")
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		// part 文件名：<相对路径>.<size>.part —— 去掉结尾 ".part" 再剥最后一段 size
+		base := strings.TrimSuffix(rel, ".part")
 		dot := strings.LastIndex(base, ".")
 		if dot <= 0 { // 无 size 段（旧版残留）跳过
-			continue
+			return nil
 		}
 		size, err := strconv.ParseInt(base[dot+1:], 10, 64)
 		if err != nil || size <= 0 {
-			continue
+			return nil
 		}
 		name := base[:dot]
-		fi, err := e.Info()
+		fi, err := d.Info()
 		if err != nil {
-			continue
+			return nil
 		}
 		have := 0
 		for _, b := range loadBitmap(dir, name, size) {
@@ -448,7 +484,8 @@ func scanPartialsIn(dir string) []map[string]any {
 			"chunks": chunkCount(size), "have": have,
 			"mtime": fi.ModTime().UnixMilli(),
 		})
-	}
+		return nil
+	})
 	sort.Slice(out, func(i, j int) bool {
 		return out[i]["mtime"].(int64) > out[j]["mtime"].(int64)
 	})
@@ -466,29 +503,30 @@ func (s *Server) purgePartials(name string) (int, error) {
 // 避免同一个 sync.Mutex 重入导致死锁。
 func (s *Server) purgePartialsLocked(name string) (int, error) {
 	dir := s.Dir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0, err
-	}
 	removed := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".part") {
-			continue
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".part") {
+			return nil
 		}
-		base := strings.TrimSuffix(e.Name(), ".part")
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return nil
+		}
+		base := strings.TrimSuffix(filepath.ToSlash(rel), ".part")
 		dot := strings.LastIndex(base, ".")
 		if dot <= 0 {
-			continue
+			return nil
 		}
 		owner := base[:dot]
 		if name != "" && owner != name {
-			continue
+			return nil
 		}
-		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !os.IsNotExist(err) {
-			return removed, err
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
 		}
-		_ = os.Remove(filepath.Join(dir, e.Name()+".bits"))
+		_ = os.Remove(p + ".bits")
 		removed++
-	}
-	return removed, nil
+		return nil
+	})
+	return removed, err
 }

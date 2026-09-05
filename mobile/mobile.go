@@ -41,6 +41,9 @@ func Start(port int64, dir string) (string, error) {
 	if port <= 0 || port > 65535 {
 		return "", fmt.Errorf("端口号不合法: %d", port)
 	}
+	// 配置（令牌 / 最近对端）必须落在 App 传进来的可写目录：
+	// 安卓上 os.Executable 指向的是只读的 APK 挂载点，直接用会写配置失败。
+	core.SetConfigBase(dir)
 	// 先探测端口可用，把「被占用」这类错误当场带回给界面，
 	// 而不是等 goroutine 里 ListenAndServe 失败后没人接。
 	probe, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
@@ -53,6 +56,12 @@ func Start(port int64, dir string) (string, error) {
 	go func() { _ = srv.ListenAndServe() }()
 	current = srv
 	return srv.URL(), nil
+}
+
+// LastPeer 返回最近一次主动连接过的对端页面地址（含凭据），没有则返回空串。
+// App 收到系统分享时用它作为默认上传目标，实现相册一步直达。
+func LastPeer() string {
+	return core.LoadConfigExport().LastPeer
 }
 
 // Stop 停止服务并释放端口。未启动时是安全的空操作。

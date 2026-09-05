@@ -16,6 +16,7 @@ import (
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
+	isolateConfig(t)
 	return New(0, t.TempDir(), true) // NoAuth：测试里不折腾令牌
 }
 

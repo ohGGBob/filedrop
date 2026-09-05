@@ -7,12 +7,17 @@ android {
     namespace 'com.ohggbob.filedrop'
     compileSdk 35
 
+    // 版本由 CI 从 core/server.go 的 Version 常量提取后注入（-PversionName=），
+    // versionCode 用 git 提交数，保证单调递增。本地无参数时用兜底值。
+    def vName = project.findProperty('versionName') ?: '0.7.0'
+    def vCode = (project.findProperty('versionCode') ?: '11').toInteger()
+
     defaultConfig {
         applicationId "com.ohggbob.filedrop"
         minSdk 26
         targetSdk 35
-        versionCode 6
-        versionName "0.6.0"
+        versionCode vCode
+        versionName vName
     }
 
     // 自签 keystore 随仓库提交：保证任何人构建出的 APK 签名一致，可覆盖升级。

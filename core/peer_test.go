@@ -98,7 +98,7 @@ func pendingIPs(t *testing.T, s *Server) []map[string]any {
 // 请求 → 本机可见待批准 → 允许 → 拿到授权 → 从同一来源 IP 传分块成功。
 func TestPeerApprovalGrantsWrite(t *testing.T) {
 	withShortWait(t, 5*time.Second)
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 	ch := runHandshake(s, peerTestIP)
 
 	// 批准之前，同一台主机的写请求必须被拦住
@@ -164,7 +164,7 @@ func TestPeerApprovalGrantsWrite(t *testing.T) {
 // TestPeerRepeatHandshakeSkipsPrompt 同一台已批准的设备再来一次，不该再折腾主人一遍。
 func TestPeerRepeatHandshakeSkipsPrompt(t *testing.T) {
 	withShortWait(t, 5*time.Second)
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 
 	ch := runHandshake(s, peerTestIP)
 	waitPending(t, s, 1)
@@ -185,7 +185,7 @@ func TestPeerRepeatHandshakeSkipsPrompt(t *testing.T) {
 
 func TestPeerDenyAndTimeout(t *testing.T) {
 	withShortWait(t, 300*time.Millisecond)
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 
 	ch := runHandshake(s, peerTestIP)
 	waitPending(t, s, 1)
@@ -210,7 +210,7 @@ func TestPeerDenyAndTimeout(t *testing.T) {
 // 会把后来者那条待批准一起删掉——屏幕上不再出现按钮，后来者只能干等到超时。
 func TestSupersededHandshakeKeepsNewerPending(t *testing.T) {
 	withShortWait(t, 5*time.Second)
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 
 	first := runHandshake(s, peerTestIP)
 	waitPending(t, s, 1)
@@ -234,7 +234,7 @@ func TestSupersededHandshakeKeepsNewerPending(t *testing.T) {
 
 // TestGrantExpires 授权到期后必须立刻失去写能力。
 func TestGrantExpires(t *testing.T) {
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 	key, _ := s.access.issue(peerTestHost)
 	if !s.access.valid(key, peerTestHost) {
 		t.Fatal("刚发出的授权就该不可用？")
@@ -256,7 +256,7 @@ func TestGrantExpires(t *testing.T) {
 
 // TestGrantCountCapped 每次批准都留一条记录，这张表不能无限增长。
 func TestGrantCountCapped(t *testing.T) {
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 	var latest, latestIP string
 	for i := 0; i < maxGrants+6; i++ {
 		latestIP = fmt.Sprintf("203.0.113.%d", i+1)
@@ -276,7 +276,7 @@ func TestGrantCountCapped(t *testing.T) {
 // TestPeerControlEndpointsNeedToken 查看待批准 / 批准 / 代发起请求都要本机写权限，
 // 否则任何同网主机都能替屏幕前的人按下「允许」。
 func TestPeerControlEndpointsNeedToken(t *testing.T) {
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 	cases := []struct {
 		name   string
 		target string
@@ -319,7 +319,7 @@ func TestValidPeerTarget(t *testing.T) {
 
 // TestPeersEndpointReadable 列设备是读操作，不该卡令牌；而且列表里不许出现任何凭证。
 func TestPeersEndpointReadable(t *testing.T) {
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 	s.peers.upsert(Peer{ID: "abc", Name: "客厅台式机", Host: "192.168.1.30", Port: 28080,
 		URL: "http://192.168.1.30:28080/", Ver: "0.4.0"}, "lan")
 	w := httptest.NewRecorder()
@@ -343,7 +343,7 @@ func TestPeersEndpointReadable(t *testing.T) {
 
 // TestManualAddPeerNeedsRealFileDrop 手填地址要先探测对方 /api/info，不是 FileDrop 就不收。
 func TestManualAddPeerNeedsRealFileDrop(t *testing.T) {
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 
 	notFileDrop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -373,7 +373,7 @@ func TestManualAddPeerNeedsRealFileDrop(t *testing.T) {
 // TestBeaconRoundTripOnRealSocket 用真 UDP socket 压一遍收发：无关流量要没反应、
 // whois 要有回音、收到的 iam 要进表、自己的 iam 不能把自己认成对端。
 func TestBeaconRoundTripOnRealSocket(t *testing.T) {
-	s := New(28123, t.TempDir(), false)
+	s := newPeerServer(t)
 	s.StartDiscovery()
 	if s.discErr != nil {
 		t.Skipf("端口 %d 绑不上（多半是已有 FileDrop 实例在跑）：%v", discPort, s.discErr)

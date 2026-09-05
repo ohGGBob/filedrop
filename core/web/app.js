@@ -96,27 +96,56 @@ copyBtn.addEventListener('click', async () => {
 });
 
 // ---- 文件列表 ----
+const zipSelBtn = $('zipSel');
+
+function selectedNames() {
+  return Array.from(fileListEl.querySelectorAll('input[type=checkbox]:checked'))
+    .map((c) => c.dataset.name);
+}
+
+function refreshZipBtn() {
+  if (!zipSelBtn) return;
+  zipSelBtn.style.display = selectedNames().length ? '' : 'none';
+}
+
 async function loadFiles() {
   try {
     const r = await fetch('/api/files');
     if (!r.ok) throw new Error('list ' + r.status);
     const list = await r.json();
-    if (!list.length) { fileListEl.innerHTML = '<div class="empty">本机还没有可下载的文件</div>'; return; }
+    if (!list.length) { fileListEl.innerHTML = '<div class="empty">本机还没有可下载的文件</div>'; if (zipSelBtn) zipSelBtn.style.display = 'none'; return; }
     let html = '<table><thead><tr><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
     const prefix = getPrefix();
     for (const f of list) {
       const enc = encodeURIComponent(f.name);
-      const dlName = prefix + f.name;
-      html += '<tr><td>' + escapeHtml(f.name) + '</td><td class="size">' + fmtSize(f.size) +
+      const dlName = prefix + (f.name.split('/').pop());
+      html += '<tr><td><label style="display:flex;gap:6px;align-items:center;">' +
+        '<input type="checkbox" data-name="' + escapeHtml(f.name) + '" />' +
+        '<span>' + escapeHtml(f.name) + '</span></label></td><td class="size">' + fmtSize(f.size) +
         '</td><td><a class="dl" href="/api/download?name=' + enc + '" download="' + escapeHtml(dlName) + '">下载</a>' +
         ' · <a href="#" class="dl" data-act="rename" data-name="' + escapeHtml(f.name) + '">重命名</a>' +
         ' · <a href="#" class="dl" data-act="del" data-name="' + escapeHtml(f.name) + '">删除</a></td></tr>';
     }
     html += '</tbody></table>';
     fileListEl.innerHTML = html;
+    refreshZipBtn();
   } catch (e) {
     fileListEl.innerHTML = '<div class="empty">列表加载失败：' + escapeHtml(String(e)) + '</div>';
   }
+}
+
+if (zipSelBtn) {
+  zipSelBtn.addEventListener('click', () => {
+    const names = selectedNames();
+    if (!names.length) return;
+    // 直接用 <a download> 让浏览器把 ZIP 存下来；服务端流式打包，不占磁盘
+    const a = document.createElement('a');
+    a.href = '/api/zip?names=' + encodeURIComponent(names.join(','));
+    a.download = 'FileDrop_打包.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -135,6 +164,9 @@ const queueEl = $('upQueue'), summaryEl = $('upSummary');
 const cancelAllBtn = $('cancelAll'), clearDoneBtn = $('clearDone');
 
 let tasks = [], taskIdSeq = 0, runner = null;
+// 同名冲突的会话级选择：null=还没问过；'overwrite'=覆盖；'keep'=共存改名。
+// 记住一次选择是为了批量传照片时不被确认框刷屏。
+let conflictChoice = null;
 
 const isAbort = (e) => !!e && (e.name === 'AbortError' || e.code === 20);
 
@@ -169,18 +201,21 @@ async function fingerprint(file) {
 }
 
 function makeTask(file) {
+  // 文件夹上传：保留相对目录结构（"相册/IMG_1.jpg"），服务端按子路径落盘
+  const relPath = file.webkitRelativePath || file.name;
   const t = {
-    id: ++taskIdSeq, file, name: file.name, size: file.size,
+    id: ++taskIdSeq, file, name: relPath, size: file.size,
     total: Math.max(1, Math.ceil(file.size / CHUNK)),
     sent: 0, bytes: 0, bytesAt: 0, tAt: 0, speed: 0,
     status: 'queued', aborted: false, controller: null, err: '', finalName: '', reused: false,
+    overwrite: false,
   };
   const row = document.createElement('div');
   row.className = 'qrow queued';
 
   const head = document.createElement('div'); head.className = 'qhead';
   const nm = document.createElement('span'); nm.className = 'qname';
-  nm.textContent = file.name;                     // textContent：文件名里的 <>"& 不会被解析成标签
+  nm.textContent = relPath;                       // textContent：文件名里的 <>"& 不会被解析成标签
   const sz = document.createElement('span'); sz.className = 'qsize';
   sz.textContent = fmtSize(file.size);
   head.append(nm, sz);
@@ -340,6 +375,16 @@ async function runTask(t) {
     renderTask(t); renderTotals();
     return;
   }
+  // 同名同大小的文件已在本机，但内容指纹对不上：问一次「覆盖还是共存」，
+  // 选择记到会话里，本批后面的同名冲突沿用，不为每张照片都弹一次窗。
+  if (st.exists && !t.overwrite && conflictChoice === null) {
+    conflictChoice = confirm(
+      '本机已有同名同大小的「' + name + '」，但内容不同。\n\n' +
+      '确定 = 覆盖旧文件（本批全部同名冲突都覆盖）\n' +
+      '取消 = 两份都保留，新文件自动改名（本批全部共存）'
+    ) ? 'overwrite' : 'keep';
+  }
+  if (st.exists && conflictChoice === 'overwrite') t.overwrite = true;
   const missing = (st.missing || []).slice();
   t.sent = Math.max(0, t.total - missing.length);
   renderTask(t);
@@ -362,7 +407,8 @@ async function runTask(t) {
   // 3) 收尾；服务端可能回 missing 让补传
   for (let attempt = 0; attempt < 3; attempt++) {
     const r = await fetch('/api/upload/complete?' + authPair() +
-      '&name=' + encodeURIComponent(name) + '&size=' + size, { method: 'POST', signal });
+      '&name=' + encodeURIComponent(name) + '&size=' + size +
+      (t.overwrite ? '&mode=overwrite' : ''), { method: 'POST', signal });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
       t.sha256 = j.sha256 || '';
@@ -426,6 +472,21 @@ if (clearDoneBtn) {
 // ---- 交互绑定 ----
 drop.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => { enqueueFiles(fileInput.files); fileInput.value = ''; });
+
+// 文件夹上传：只在实际支持的浏览器显示入口（安卓 WebView 的文件选择不带目录信息）
+const supportsDirPick = (() => {
+  try { const i = document.createElement('input'); return 'webkitdirectory' in i && !/; wv\)/.test(navigator.userAgent); }
+  catch (_) { return false; }
+})();
+const folderInput = $('folder'), pickFolderBtn = $('pickFolderBtn');
+if (pickFolderBtn) {
+  pickFolderBtn.style.display = supportsDirPick ? '' : 'none';
+  if (supportsDirPick) {
+    pickFolderBtn.addEventListener('click', () => folderInput.click());
+    folderInput.addEventListener('change', () => { enqueueFiles(folderInput.files); folderInput.value = ''; });
+  }
+}
+
 ['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', (e) => {
@@ -437,6 +498,9 @@ drop.addEventListener('drop', (e) => {
 }));
 
 // ---- 删除 / 重命名（事件委托） ----
+fileListEl.addEventListener('change', (e) => {
+  if (e.target && e.target.type === 'checkbox') refreshZipBtn();
+});
 fileListEl.addEventListener('click', async (e) => {
   const a = e.target.closest('a[data-act]');
   if (!a) return;
@@ -675,7 +739,12 @@ async function requestUpload(p, btn) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     setPeerStatus('对方已批准，正在打开它的页面…（授权半小时内有效）');
-    if (/^http:\/\/[^\s]+$/.test(j.url || '')) setTimeout(() => { location.href = j.url; }, 700);
+    if (/^http:\/\/[^\s]+$/.test(j.url || '')) {
+      // 记住这个对端（含凭据）：安卓 App 收到系统分享时直接把它当上传目标，
+      // 相册里的照片就能一步发到这台设备，不用先开 App 再选。
+      fetch('/api/remember-peer?' + authPair() + '&url=' + encodeURIComponent(j.url), { method: 'POST' }).catch(() => {});
+      setTimeout(() => { location.href = j.url; }, 700);
+    }
   } catch (e) {
     setPeerStatus('请求未成功：' + e);
     btn.disabled = false;

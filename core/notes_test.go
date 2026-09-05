@@ -17,6 +17,7 @@ func newNoteTest(t *testing.T) *Server {
 	t.Helper()
 	notesTestPath = filepath.Join(t.TempDir(), "filedrop-notes.json")
 	t.Cleanup(func() { notesTestPath = "" })
+	isolateConfig(t)
 	return New(0, t.TempDir(), false)
 }
 

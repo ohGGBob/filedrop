@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -17,12 +18,31 @@ import (
 // Config 是持久化的用户设置（存放在 exe 同级的 filedrop-config.json）。
 type Config struct {
 	Dir string `json:"dir"`
+	// Token 持久化的配对令牌：重启不变，手机书签 / 记住的设备才长期有效。
+	Token string `json:"token,omitempty"`
+	// LastPeer 最近一次主动连接的对端页面（含令牌或授权）。
+	// 安卓 App 收到系统分享时拿它当默认上传目标，相册一步直达。
+	LastPeer string `json:"lastPeer,omitempty"`
 }
 
-// dataPath 返回随 exe 一起存放的数据文件路径：便携版拷走目录即带走全部状态。
+// cfgBase 是配置/数据文件的落点目录。桌面版留空（继续用 exe 同级）；
+// 安卓下 os.Executable 不可靠，App 在 Start 前把可写的私有目录传进来。
+var cfgBase string
+
+// SetConfigBase 指定配置与数据文件的存放目录。
+func SetConfigBase(d string) {
+	if strings.TrimSpace(d) != "" {
+		cfgBase = d
+	}
+}
+
+// dataPath 返回随程序一起存放的数据文件路径：便携版拷走目录即带走全部状态。
 // 便签刻意放在接收目录之外——否则它会混进 /api/files 的下载列表，
 // 还会被「删除文件」之类的操作误伤。
 func dataPath(name string) string {
+	if cfgBase != "" {
+		return filepath.Join(cfgBase, name)
+	}
 	if exe, err := os.Executable(); err == nil {
 		if d := filepath.Dir(exe); d != "" {
 			return filepath.Join(d, name)
@@ -31,7 +51,7 @@ func dataPath(name string) string {
 	return name
 }
 
-// configPath 返回配置文件路径：与可执行文件同级，保证「便携版」拷贝目录即走。
+// configPath 返回配置文件路径。
 func configPath() string { return dataPath("filedrop-config.json") }
 
 func loadConfig() (Config, error) {
@@ -52,6 +72,45 @@ func saveConfig(c Config) error {
 		return err
 	}
 	return os.WriteFile(configPath(), b, 0o644)
+}
+
+// LoadConfigExport 导出一份当前配置（mobile 桥接层读取 LastPeer 用）。
+func LoadConfigExport() Config {
+	c, _ := loadConfig()
+	return c
+}
+
+// peerURLRe 收敛「可记住的对端地址」：只认 http://IP:端口/?t= 或 ?g= 凭据。
+// lastPeer 会被 App 拿来直接发文件，绝不能让任意字符串混进配置。
+var peerURLRe = regexp.MustCompile(`^http://(\d{1,3}\.){3}\d{1,3}:\d+/\?(?:t|g)=[0-9a-fA-F]+$`)
+
+// RememberPeer 记住最近一次连接的对端页面地址（含凭据）。
+func (s *Server) RememberPeer(u string) error {
+	u = strings.TrimSpace(u)
+	if !peerURLRe.MatchString(u) {
+		return errors.New("对端地址格式不合法")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg, err := loadConfig()
+	if err != nil {
+		cfg = Config{}
+	}
+	cfg.LastPeer = u
+	return saveConfig(cfg)
+}
+
+// rememberPeerHandler 处理 POST /api/remember-peer?url=...。
+func (s *Server) rememberPeerHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
+	if err := s.RememberPeer(r.URL.Query().Get("url")); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true})
 }
 
 // SetDir 切换接收目录：建目录、校验可写、立即生效并写入配置。
@@ -83,14 +142,22 @@ func (s *Server) SetDir(dir string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 先读出整份配置再改 Dir：只写 Config{Dir} 会把 Token / LastPeer 一并抹掉，
+	// 手机上的书签和 App 记住的设备就全失效了。
+	cfg, err := loadConfig()
+	if err != nil {
+		cfg = Config{}
+	}
 	if abs == s.Dir() {
-		return saveConfig(Config{Dir: abs}) // 切回当前目录：只记住，不动别的
+		cfg.Dir = abs
+		return saveConfig(cfg) // 切回当前目录：只记住，不动别的
 	}
 	if left := len(scanPartialsIn(s.Dir())); left > 0 {
 		return fmt.Errorf("还有 %d 个未传完的文件，请先在「中断的传输」里续传或清理，再切换接收目录", left)
 	}
 	s.setDir(abs)
-	return saveConfig(Config{Dir: abs})
+	cfg.Dir = abs
+	return saveConfig(cfg)
 }
 
 // settingsHandler 读取 / 修改接收目录。

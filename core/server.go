@@ -3,6 +3,7 @@
 package core
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -31,8 +32,9 @@ import (
 //go:embed all:web
 var webFS embed.FS
 
-// Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘。
-const Version = "0.5.0"
+// Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘 / 安卓 App。
+// CI 会把这里提取的值注入安卓 gradle 的 versionName——改这里，两边一起变。
+const Version = "0.7.0"
 
 // Server 是一个 FileDrop 实例。
 type Server struct {
@@ -70,9 +72,17 @@ type Server struct {
 
 // New 创建实例并生成配对令牌；接收目录不可写时自动回退到用户目录下的 FileDrop。
 func New(port int, dir string, noAuth bool) *Server {
-	// 优先使用上次保存的接收目录（配置文件与 exe 同级）
-	if cfg, err := loadConfig(); err == nil && strings.TrimSpace(cfg.Dir) != "" {
-		dir = cfg.Dir
+	// 优先沿用上次保存的接收目录与令牌（配置文件与 exe 同级）。
+	// 令牌持久化是刻意设计：重启就换新令牌的话，手机上的书签、App 记住的
+	// 设备全部失效，「记住这台电脑」就成了空话。
+	token := randHex(16)
+	if cfg, err := loadConfig(); err == nil {
+		if strings.TrimSpace(cfg.Dir) != "" {
+			dir = cfg.Dir
+		}
+		if strings.TrimSpace(cfg.Token) != "" {
+			token = cfg.Token
+		}
 	}
 	if abs, e := filepath.Abs(dir); e == nil {
 		dir = abs
@@ -85,11 +95,25 @@ func New(port int, dir string, noAuth bool) *Server {
 			}
 		}
 	}
-	return &Server{
-		Port: port, dir: dir, NoAuth: noAuth, token: randHex(16), ip: lanIP(), hub: newEventHub(),
+	srv := &Server{
+		Port: port, dir: dir, NoAuth: noAuth, token: token, ip: lanIP(), hub: newEventHub(),
 		id: randHex(8), deviceName: deviceNameOf(),
 		peers: newPeerTable(), access: newPeerAccess(),
 	}
+	// 首次启动把令牌写进配置；已持久化的令牌原样保留即可
+	if cfg, err := loadConfig(); err != nil || strings.TrimSpace(cfg.Token) == "" {
+		if c2, e2 := loadConfig(); e2 != nil {
+			c2 = Config{Dir: srv.dir, Token: token}
+			_ = saveConfig(c2)
+		} else if strings.TrimSpace(c2.Token) == "" {
+			c2.Token = token
+			if strings.TrimSpace(c2.Dir) == "" {
+				c2.Dir = srv.dir
+			}
+			_ = saveConfig(c2)
+		}
+	}
+	return srv
 }
 
 // Dir 返回当前接收目录的快照。
@@ -193,10 +217,14 @@ func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		s.requestHandler(w, r)
 	case "/api/download":
 		s.download(w, r)
+	case "/api/zip":
+		s.zipHandler(w, r)
 	case "/api/events":
 		s.eventsHandler(w, r)
 	case "/api/settings":
 		s.settingsHandler(w, r)
+	case "/api/remember-peer":
+		s.rememberPeerHandler(w, r)
 	case "/api/open-folder":
 		s.openFolderHandler(w, r)
 	case "/api/pick-folder":
@@ -265,27 +293,36 @@ func isLoopback(r *http.Request) bool {
 // ---------- 接口实现 ----------
 func (s *Server) listFiles(w http.ResponseWriter) {
 	dir := s.Dir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, "read dir")
-		return
-	}
-	out := make([]map[string]any, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || strings.HasSuffix(e.Name(), ".part") ||
-			strings.HasSuffix(e.Name(), ".sha256") || strings.HasSuffix(e.Name(), ".bits") {
-			continue
-		}
-		fi, err := e.Info()
+	out := make([]map[string]any, 0, 64)
+	// 递归列出（文件夹上传会把文件放进子目录）；name 一律是接收目录内的相对路径
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return nil // 读不到的子树跳过，别让一个坏目录毁掉整个列表
 		}
-		rec := map[string]any{"name": e.Name(), "size": fi.Size(), "mtime": fi.ModTime().UnixMilli()}
-		if b, err := os.ReadFile(filepath.Join(dir, e.Name()) + ".sha256"); err == nil {
+		if d.IsDir() {
+			return nil
+		}
+		n := d.Name()
+		if strings.HasSuffix(n, ".part") ||
+			strings.HasSuffix(n, ".sha256") || strings.HasSuffix(n, ".bits") {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		fi, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		rec := map[string]any{"name": rel, "size": fi.Size(), "mtime": fi.ModTime().UnixMilli()}
+		if b, err := os.ReadFile(p + ".sha256"); err == nil {
 			rec["sha256"] = strings.TrimSpace(string(b))
 		}
 		out = append(out, rec)
-	}
+		return nil
+	})
 	// 新收到的排前面：按修改时间倒序，同时刻则按名称稳定兜底
 	sort.Slice(out, func(i, j int) bool {
 		mi := out[i]["mtime"].(int64)
@@ -304,7 +341,7 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusForbidden, "token required")
 		return
 	}
-	name := safeName(r.URL.Query().Get("name"))
+	name := safeRelPath(r.URL.Query().Get("name"))
 	if name == "" {
 		badName(w)
 		return
@@ -340,7 +377,7 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad json")
 		return
 	}
-	old, nn := safeName(body.Name), safeName(body.NewName)
+	old, nn := safeRelPath(body.Name), safeRelPath(body.NewName)
 	if old == "" || nn == "" {
 		badName(w)
 		return
@@ -373,7 +410,7 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
-	name := safeName(r.URL.Query().Get("name"))
+	name := safeRelPath(r.URL.Query().Get("name"))
 	if name == "" {
 		http.Error(w, "invalid file name", http.StatusBadRequest)
 		return
@@ -390,9 +427,65 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "stat", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Disposition", contentDisposition(name))
+	w.Header().Set("Content-Disposition", contentDisposition(path.Base(name)))
 	w.Header().Set("Accept-Ranges", "bytes")
-	http.ServeContent(w, r, name, fi.ModTime(), f) // 自动处理 Range / 206
+	http.ServeContent(w, r, path.Base(name), fi.ModTime(), f) // 自动处理 Range / 206
+}
+
+// zipHandler 处理 GET /api/zip?names=a,b,c：把多个文件流式打包成 ZIP 下载。
+// 不落盘、全程写响应流；大文件用 Store（不压缩）——照片视频本来就压不动，
+// 省下的 CPU 全部变成传输速度。zip64 由标准库按需启用，单文件 >4GB 也没问题。
+func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
+	var names []string
+	for _, n := range strings.Split(r.URL.Query().Get("names"), ",") {
+		if n = safeRelPath(strings.TrimSpace(n)); n != "" {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		http.Error(w, "no valid file names", http.StatusBadRequest)
+		return
+	}
+	dir := s.Dir()
+
+	// 快照：持锁只取文件信息，打包全程不持锁——不然一个几 GB 的打包
+	// 会把并发上传全部卡死。
+	type snap struct {
+		path, rel string
+		mod       time.Time
+	}
+	snaps := make([]snap, 0, len(names))
+	s.mu.Lock()
+	for _, n := range names {
+		if fi, err := os.Stat(filepath.Join(dir, n)); err == nil && !fi.IsDir() {
+			snaps = append(snaps, snap{filepath.Join(dir, n), n, fi.ModTime()})
+		}
+	}
+	s.mu.Unlock()
+	if len(snaps) == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", contentDisposition("FileDrop_打包.zip"))
+	zw := zip.NewWriter(w)
+	for _, sp := range snaps {
+		f, err := os.Open(sp.path)
+		if err != nil {
+			continue // 文件刚好被删了：跳过，别毁掉整个包
+		}
+		hdr := &zip.FileHeader{Name: sp.rel, Method: zip.Store, Modified: sp.mod}
+		fw, err := zw.CreateHeader(hdr)
+		if err == nil {
+			_, err = io.Copy(fw, f)
+		}
+		f.Close()
+		if err != nil {
+			return // 客户端断开，响应已无法挽回
+		}
+	}
+	_ = zw.Close()
 }
 
 // contentDisposition 生成 RFC 6266 的 Content-Disposition 值：
@@ -573,6 +666,41 @@ func sanitizeIllegalChars(s string) string {
 		return s
 	}
 	return string(b)
+}
+
+// maxRelPathBytes 限制相对路径总长（每段另有 maxNameBytes 限制）。
+const maxRelPathBytes = 600
+
+// safeRelPath 在 safeName 的基础上放行相对子路径（"相册/IMG_1.jpg"），
+// 供文件夹上传保留目录结构。防御要点：
+//   - 任何 ".." 段直接拒绝，不允许逃逸接收目录（不静默压平，坏了就是坏了）；
+//   - 拒绝盘符（"C:" 里的冒号会被段内清洗成下划线，因此盘符天然不成立）；
+//   - 每一段各自过 safeName 的全部关卡（保留设备名、结尾点空格、非法字符、长度）。
+func safeRelPath(s string) string {
+	s = strings.ReplaceAll(s, "\\", "/")
+	parts := strings.Split(s, "/")
+	cleaned := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p == "" || p == "." {
+			continue
+		}
+		if p == ".." {
+			return ""
+		}
+		n := safeName(p)
+		if n == "" {
+			return ""
+		}
+		cleaned = append(cleaned, n)
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+	out := strings.Join(cleaned, "/")
+	if len(out) > maxRelPathBytes {
+		return ""
+	}
+	return out
 }
 
 // badName 统一「文件名不可用」的响应文案，供各写接口复用。

@@ -159,6 +159,10 @@
       <h2>发送（上传到本机）</h2>
       <div id="drop" class="drop">点击选择文件（可多选），或把文件拖到这里<br/><span class="hint">支持 4GB+ · 自动分块 · 断点续传</span></div>
       <input id="file" type="file" multiple hidden />
+      <input id="folder" type="file" multiple webkitdirectory hidden />
+      <div class="row" style="margin-top:8px;">
+        <button id="pickFolderBtn" style="display:none">选择文件夹上传</button>
+      </div>
       <div class="progress"><span id="upBar"></span></div>
       <div id="upSummary" class="meta"></div>
       <div id="upQueue" class="queue"></div>
@@ -167,11 +171,11 @@
         <button id="clearDone" style="display:none">清除已完成</button>
       </div>
       <div id="upStatus" class="meta"></div>
-      <div class="hint">多个文件按顺序传，随时可单独取消；取消或中断留下的半截数据不占地方也看不见，请在下方「中断的传输」清理。重新选择同一个文件会自动续传。</div>
+      <div class="hint">多个文件按顺序传，随时可单独取消；取消或中断留下的半截数据不占地方也看不见，请在下方「中断的传输」清理。重新选择同一个文件会自动续传。文件夹上传会保留目录结构（仅桌面浏览器支持）。</div>
     </section>
 
     <section class="card" style="flex:1 1 360px;">
-      <h2>接收（从本机下载）</h2>
+      <h2>接收（从本机下载）<button id="zipSel" style="float:right; display:none;">打包下载所选</button></h2>
       <div id="fileList"><div class="empty">加载中…</div></div>
     </section>
   </div>

@@ -73,12 +73,21 @@ jobs:
           ndk-version: r27b
           add-to-path: false
 
-      - name: gomobile init & bind
+      - name: Extract version from core
+        id: ver
+        run: |
+          VERSION=$(grep -oE 'Version = "[0-9]+\.[0-9]+\.[0-9]+"' core/server.go | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          VCODE=$(git rev-list --count HEAD)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vcode=$VCODE" >> "$GITHUB_OUTPUT"
+          echo "core version=$VERSION, versionCode=$VCODE"
+
+      - name: gomobile init & bind (arm64 only)
         run: |
           export ANDROID_NDK_HOME="${{ steps.ndk.outputs.ndk-path }}"
           gomobile init
           mkdir -p android/app/libs
-          if ! gomobile bind -target=android -androidapi 26 \
+          if ! gomobile bind -target=android -androidapi 26 -abi arm64 \
               -o android/app/libs/filedrop.aar ./mobile 2>&1 | tee bind.log; then
             {
               echo "### gomobile bind 失败日志"
@@ -97,7 +106,10 @@ jobs:
       - name: Gradle assembleRelease
         run: |
           cd android
-          gradle assembleRelease --no-daemon
+          gradle \
+            -PversionName=${{ steps.ver.outputs.version }} \
+            -PversionCode=${{ steps.ver.outputs.vcode }} \
+            assembleRelease --no-daemon
 
       - name: Rename APK
         run: |
