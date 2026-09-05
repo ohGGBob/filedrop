@@ -197,7 +197,8 @@ class MainActivity : AppCompatActivity() {
     /** 分享发送：优先直传上次连接过的设备；没记住任何设备就落在本机接收目录。 */
     private fun shareUpload(uris: List<Uri>) {
         // 目标 1：上次主动连接过的对端（含凭据，见 /api/remember-peer）
-        val peer = Mobile.LastPeer().takeIf { it.isNotBlank() }?.let { Uploader.splitPeer(it) }
+        // gobind 生成 Java 方法时按驼峰约定把首字母小写（Go 的 LastPeer → lastPeer）
+        val peer = Mobile.lastPeer().takeIf { it.isNotBlank() }?.let { Uploader.splitPeer(it) }
         // 目标 2（兜底）：本机服务——文件进接收目录，电脑打开手机页面即可取走
         val local = Uploader.splitPeer(pageUrl)
 

@@ -106,10 +106,19 @@ jobs:
       - name: Gradle assembleRelease
         run: |
           cd android
-          gradle \
-            -PversionName=${{ steps.ver.outputs.version }} \
-            -PversionCode=${{ steps.ver.outputs.vcode }} \
-            assembleRelease --no-daemon
+          set -o pipefail
+          if ! gradle \
+              -PversionName=${{ steps.ver.outputs.version }} \
+              -PversionCode=${{ steps.ver.outputs.vcode }} \
+              assembleRelease --no-daemon 2>&1 | tee gradle.log; then
+            {
+              echo "### gradle 失败日志"
+              echo '```'
+              tail -c 20000 gradle.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Rename APK
         run: |
