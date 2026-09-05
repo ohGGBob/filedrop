@@ -1,0 +1,349 @@
+package core
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// 上传协议 v0.2：
+//  1. 客户端 GET /api/upload/status 取得缺块列表（依据位图精确断点续传）；
+//  2. 客户端并发 POST /api/upload/chunk，服务端按 index*chunkSize WriteAt 落盘并记位；
+//  3. 全部完成后 POST /api/upload/complete，服务端校验大小、算 SHA-256、重命名落盘。
+//
+// 并发友好：分块可乱序 / 并行到达，最终一致性由 complete 步骤保证。
+
+const chunkSize = 8 * 1024 * 1024 // 8 MiB，需与前端 / 测试客户端一致
+
+// chunkCount 返回 size 字节对应总分块数。
+func chunkCount(size int64) int {
+	return int((size + chunkSize - 1) / chunkSize)
+}
+
+// 残留文件名编码规则：<原文件名>.<文件字节数>.part[.bits]
+//
+// 关键点：把 size 编进文件名。否则「同名文件、不同大小」的两次上传会共用同一份
+// .part / 位图——旧位图长度恰好够新文件用时会被直接复用，新文件的前 N 块被误判为
+// 已收到，最终 complete 算出的 SHA-256 是「新旧拼接后的损坏数据」的哈希，
+// 校验因此"通过"，损坏被静默写盘。带上 size 后两次上传天然隔离。
+func partPath(dir, name string, size int64) string {
+	return filepath.Join(dir, fmt.Sprintf("%s.%d.part", name, size))
+}
+
+// bitsPath 返回该文件对应的接收位图路径。
+func bitsPath(dir, name string, size int64) string { return partPath(dir, name, size) + ".bits" }
+
+// loadBitmap 读取接收位图（chunkCount(size) 字节，每字节 0/1 表示该块是否已收齐）。
+// 位图文件缺失时：若存在 v0.1 顺序上传残留的 .part，按其连续字节推断并视为旧版数据。
+func loadBitmap(dir, name string, size int64) []byte {
+	total := chunkCount(size)
+	bits := make([]byte, total)
+	if data, err := os.ReadFile(bitsPath(dir, name, size)); err == nil && len(data) >= total {
+		copy(bits, data[:total])
+		return bits
+	}
+	// 迁移旧版（v0.1 顺序上传）残留：.part 前 N 块视为已收
+	if fi, err := os.Stat(partPath(dir, name, size)); err == nil {
+		n := int((fi.Size() + chunkSize - 1) / chunkSize)
+		if n > total {
+			n = total
+		}
+		for i := 0; i < n; i++ {
+			bits[i] = 1
+		}
+	}
+	return bits
+}
+
+func writeBitmap(dir, name string, size int64, bits []byte) error {
+	return os.WriteFile(bitsPath(dir, name, size), bits, 0o644)
+}
+
+// missingChunks 返回所有未收到的分块下标。
+func missingChunks(bits []byte) []int {
+	missing := make([]int, 0)
+	for i, b := range bits {
+		if b == 0 {
+			missing = append(missing, i)
+		}
+	}
+	return missing
+}
+
+// contigReceived 返回从 0 起连续收到的字节数（UI 展示用）。
+func contigReceived(bits []byte, size int64) int64 {
+	for i, b := range bits {
+		if b == 0 {
+			r := int64(i) * chunkSize
+			if r > size {
+				r = size
+			}
+			return r
+		}
+	}
+	return size
+}
+
+// uploadStatus 返回断点续传所需的缺块信息。
+func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
+	name := safeName(r.URL.Query().Get("name"))
+	size, err := strconv.ParseInt(r.URL.Query().Get("size"), 10, 64)
+	if name == "" || err != nil || size <= 0 {
+		jsonErr(w, http.StatusBadRequest, "bad params")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 同名完整文件已存在 → 直接判定完成
+	if fi, e := os.Stat(filepath.Join(s.Dir, name)); e == nil && fi.Size() == size {
+		jsonOK(w, map[string]any{
+			"received": size, "total": chunkCount(size), "chunkSize": chunkSize,
+			"missing": []int{}, "complete": true,
+		})
+		return
+	}
+
+	bits := loadBitmap(s.Dir, name, size)
+	jsonOK(w, map[string]any{
+		"received":  contigReceived(bits, size),
+		"total":     chunkCount(size),
+		"chunkSize": chunkSize,
+		"missing":   missingChunks(bits),
+		"complete":  false,
+	})
+}
+
+// uploadChunk 写入单个分块，不做落盘收尾（收尾在 complete）。
+func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	name := safeName(q.Get("name"))
+	size, sErr := strconv.ParseInt(q.Get("size"), 10, 64)
+	index, iErr := strconv.Atoi(q.Get("index"))
+
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
+	if name == "" || sErr != nil || iErr != nil || size <= 0 {
+		jsonErr(w, http.StatusBadRequest, "bad params")
+		return
+	}
+	total := chunkCount(size)
+	if index < 0 || index >= total {
+		jsonErr(w, http.StatusBadRequest, "bad index")
+		return
+	}
+	// 末块允许的最大字节数 = 到文件末尾的余量，避免越界写满一整块
+	maxWrite := int64(chunkSize)
+	if rem := size - int64(index)*chunkSize; rem < maxWrite {
+		maxWrite = rem
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, chunkSize+1))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "read body")
+		return
+	}
+	if int64(len(body)) > maxWrite {
+		jsonErr(w, http.StatusBadRequest, "chunk too large")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	bits := loadBitmap(s.Dir, name, size)
+	f, err := os.OpenFile(partPath(s.Dir, name, size), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "open part")
+		return
+	}
+	if _, err = f.WriteAt(body, int64(index)*chunkSize); err != nil {
+		f.Close()
+		jsonErr(w, http.StatusInternalServerError, "write part")
+		return
+	}
+	_ = f.Close()
+
+	bits[index] = 1
+	if err := writeBitmap(s.Dir, name, size, bits); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "write bitmap")
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+// uploadComplete 校验全部缺块已补足、算 SHA-256、重命名落盘并清位图。
+func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	name := safeName(q.Get("name"))
+	size, sErr := strconv.ParseInt(q.Get("size"), 10, 64)
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
+	if name == "" || sErr != nil || size <= 0 {
+		jsonErr(w, http.StatusBadRequest, "bad params")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	bits := loadBitmap(s.Dir, name, size)
+	if missing := missingChunks(bits); len(missing) > 0 {
+		jsonErrCode(w, http.StatusBadRequest, map[string]any{
+			"error": "incomplete", "missing": missing, "received": contigReceived(bits, size),
+		})
+		return
+	}
+
+	part := partPath(s.Dir, name, size)
+	// 规整到精确大小（末块可能与 8MiB 不对齐 / 稀疏写入造成的超长）
+	if fi, err := os.Stat(part); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "stat part")
+		return
+	} else if fi.Size() != size {
+		if f, e := os.OpenFile(part, os.O_RDWR, 0o644); e != nil {
+			jsonErr(w, http.StatusInternalServerError, "open part")
+			return
+		} else {
+			_ = f.Truncate(size)
+			_ = f.Close()
+		}
+	}
+
+	sum := shaOf(part)
+	if sum == "" {
+		jsonErr(w, http.StatusInternalServerError, "hash failed")
+		return
+	}
+	final := filepath.Join(s.Dir, name)
+	if err := os.Rename(part, final); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "rename")
+		return
+	}
+	_ = os.WriteFile(final+".sha256", []byte(sum), 0o644)
+	_ = os.Remove(bitsPath(s.Dir, name, size))
+
+	s.hub.broadcast(map[string]any{"type": "files"})
+	jsonOK(w, map[string]any{"sha256": sum})
+}
+
+// ---------- 中断残留 ----------
+// 上传中断会在接收目录留下 .part（可能是几 GB）与 .part.bits 位图。
+// 这些垃圾在文件列表里不可见，必须能列出并清理。
+
+// partialsHandler 处理 GET/DELETE /api/uploads：列出残留 / 清理残留。
+// 不带 ?name= 时清理全部。
+func (s *Server) partialsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		if !s.canWrite(r) {
+			jsonErr(w, http.StatusForbidden, "token required")
+			return
+		}
+		n, err := s.purgePartials(safeName(r.URL.Query().Get("name")))
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, "purge failed: "+err.Error())
+			return
+		}
+		s.hub.broadcast(map[string]any{"type": "files"})
+		jsonOK(w, map[string]any{"ok": true, "removed": n})
+		return
+	}
+	jsonOK(w, s.scanPartials())
+}
+
+// scanPartials 扫描接收目录里所有中断的上传残留（按修改时间倒序）。
+func (s *Server) scanPartials() []map[string]any {
+	s.mu.Lock()
+	dir := s.Dir
+	s.mu.Unlock()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if !strings.HasSuffix(n, ".part") {
+			continue
+		}
+		base := strings.TrimSuffix(n, ".part")
+		dot := strings.LastIndex(base, ".")
+		if dot <= 0 { // 无 size 段（旧版残留）跳过
+			continue
+		}
+		size, err := strconv.ParseInt(base[dot+1:], 10, 64)
+		if err != nil || size <= 0 {
+			continue
+		}
+		name := base[:dot]
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		have := 0
+		for _, b := range loadBitmap(dir, name, size) {
+			if b != 0 {
+				have++
+			}
+		}
+		out = append(out, map[string]any{
+			"name": name, "size": size, "partSize": fi.Size(),
+			"chunks": chunkCount(size), "have": have,
+			"mtime": fi.ModTime().UnixMilli(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i]["mtime"].(int64) > out[j]["mtime"].(int64)
+	})
+	return out
+}
+
+// purgePartials 删除残留及其位图；name 为空表示清理全部。返回被清理的残留个数。
+func (s *Server) purgePartials(name string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.purgePartialsLocked(name)
+}
+
+// purgePartialsLocked 是 purgePartials 的无锁版本，供已持锁的调用方（如删除文件）复用，
+// 避免同一个 sync.Mutex 重入导致死锁。
+func (s *Server) purgePartialsLocked(name string) (int, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".part") {
+			continue
+		}
+		base := strings.TrimSuffix(e.Name(), ".part")
+		dot := strings.LastIndex(base, ".")
+		if dot <= 0 {
+			continue
+		}
+		owner := base[:dot]
+		if name != "" && owner != name {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.Dir, e.Name())); err != nil && !os.IsNotExist(err) {
+			return removed, err
+		}
+		_ = os.Remove(filepath.Join(s.Dir, e.Name()+".bits"))
+		removed++
+	}
+	return removed, nil
+}

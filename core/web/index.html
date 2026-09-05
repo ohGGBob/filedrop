@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>FileDrop · 局域网文件快传</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --border: #e3e6ea; --text: #1f2329;
+    --muted: #6b7280; --brand: #2f6df0; --brand-d: #1f4fb0;
+    --ok: #1d9e75; --warn: #ba7517; --err: #d23b3b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  header {
+    padding: 18px 22px; border-bottom: 1px solid var(--border); background: var(--card);
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main { max-width: 960px; margin: 0 auto; padding: 20px 16px 48px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+  .addr {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: #f0f4ff; border: 1px solid #d6e2ff; border-radius: 8px;
+    padding: 10px 12px; word-break: break-all;
+  }
+  .addr code { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--brand-d); }
+  button {
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+  button.primary:hover { background: var(--brand-d); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 26px 16px;
+    text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
+  }
+  .drop.over { border-color: var(--brand); background: #f0f4ff; color: var(--brand-d); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .progress { height: 10px; background: #eef1f4; border-radius: 6px; overflow: hidden; margin-top: 10px; }
+  .progress > span { display: block; height: 100%; width: 0%; background: var(--brand); transition: width .2s; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; }
+  td.size { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+  .tag.ok { background: #e6f3ec; color: var(--ok); }
+  .tag.err { background: #fbe7e7; color: var(--err); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  a.dl { color: var(--brand); text-decoration: none; font-weight: 500; }
+  a.dl:hover { text-decoration: underline; }
+  .empty { color: var(--muted); padding: 12px 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FileDrop</h1>
+  <span class="sub">局域网文件快传 · 手机/平板零安装</span>
+</header>
+<main>
+  <section class="card">
+    <h2>本机连接地址</h2>
+    <div class="addr">
+      <code id="addr">检测中…</code>
+      <button id="copyAddr">复制</button>
+    </div>
+    <img id="qr" alt="扫码连接" style="display:none;margin-top:12px;width:184px;height:184px;border:1px solid var(--border);border-radius:8px;background:#fff;" />
+    <div class="hint">手机 / 平板用浏览器扫这个二维码，直接打开连接地址（已含上传令牌）。电脑端用带令牌地址才能上传。</div>
+  </section>
+
+  <section class="card">
+    <h2>接收目录（电脑端）</h2>
+    <div class="addr">
+      <code id="recvDir">读取中…</code>
+      <button id="openFolder">打开文件夹</button>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <input id="dirInput" type="text" placeholder="输入或粘贴新的接收目录，例如 D:\FileDrop" style="flex:1 1 280px;min-width:220px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;" />
+      <button id="pickFolder">浏览…</button>
+      <button id="saveDir" class="primary">保存并切换</button>
+    </div>
+    <div class="hint">切换后<b>立即生效</b>，并写入配置文件记住，下次启动还是这个目录。</div>
+  </section>
+
+  <section class="card">
+    <h2>手机下载位置</h2>
+    <div class="row">
+      <span style="font-size:13px;">下载文件名前缀</span>
+      <input id="prefixInput" type="text" style="width:180px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;" />
+    </div>
+    <div class="hint">安卓浏览器的下载目录由<b>浏览器自身</b>决定，网页改不了。请在手机 Chrome 里进：<b>设置 → 下载内容 → 下载位置</b>，指定一个专门文件夹（例如 FileDrop）。加前缀可让传过去的文件在下载目录里一眼认出。</div>
+  </section>
+
+  <div class="row" style="gap:18px; align-items:stretch;">
+    <section class="card" style="flex:1 1 360px;">
+      <h2>发送（上传到本机）</h2>
+      <div id="drop" class="drop">点击选择文件（可多选），或把文件拖到这里<br/><span class="hint">支持 4GB+ · 自动分块 · 断点续传</span></div>
+      <input id="file" type="file" multiple hidden />
+      <div id="upStatus" class="meta"></div>
+      <div class="progress"><span id="upBar"></span></div>
+    </section>
+
+    <section class="card" style="flex:1 1 360px;">
+      <h2>接收（从本机下载）</h2>
+      <div id="fileList"><div class="empty">加载中…</div></div>
+    </section>
+  </div>
+  <section class="card" id="partialCard">
+    <h2>中断的传输 <button id="purgeAll" style="float:right;">全部清理</button></h2>
+    <div id="partialList"><div class="empty">加载中…</div></div>
+    <div class="hint">上传中途关掉页面或断网，会在接收目录留下未传完的临时数据（可能几个 GB）。这里可以列出来清掉；已传完的文件不受影响。</div>
+  </section>
+
+  <div class="hint">提示：大文件上传中断后可再次选择同一文件自动续传；下载由浏览器原生支持断点续传。</div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
