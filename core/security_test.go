@@ -2,10 +2,12 @@ package core
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -61,6 +63,62 @@ func TestSafeNameKeepsNonReservedDevicePrefixes(t *testing.T) {
 		if got := safeName(n); got != n {
 			t.Errorf("safeName(%q) = %q，不该误伤正常文件名", n, got)
 		}
+	}
+}
+
+// TestSafeNameSanitizesIllegalChars Windows 非法字符要就地换成下划线而不是报错：
+// 这些名字在 macOS / 安卓上是合法的，拒绝等于让用户先去手机上改名。
+func TestSafeNameSanitizesIllegalChars(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"录像:2026-09-05.bin", "录像_2026-09-05.bin"},
+		{`a<b>c.txt`, "a_b_c.txt"},
+		{`quote".txt`, "quote_.txt"},
+		{"pipe|name.bin", "pipe_name.bin"},
+		{"q?name.txt", "q_name.txt"},
+		{"star*name.txt", "star_name.txt"},
+		{"new\nline.txt", "new_line.txt"},
+		{"tab\tname.txt", "tab_name.txt"},
+		{"\x01ctrl\x7f.bin", "_ctrl_.bin"},
+		{"NUL:", "NUL_"}, // 清洗后才过设备名判定，NUL_ 不是设备名
+	}
+	for _, c := range cases {
+		got := safeName(c.in)
+		if got != c.want {
+			t.Errorf("safeName(%q) = %q，期望 %q", c.in, got, c.want)
+		}
+		if strings.ContainsAny(got, `<>:"|?*`) {
+			t.Errorf("safeName(%q) = %q，仍含 Windows 非法字符", c.in, got)
+		}
+	}
+}
+
+// TestIllegalCharNameReallyLands 曾经是最阴的一个坑：含冒号的名字走到 os.Create
+// 时被 Windows 当成 NTFS 交替数据流，接口返回 200，字节却写进数据流里，
+// 接收目录只留下一个 0 字节的同名空文件。这里走完整上传流程，要求最终
+// 落盘文件真实存在且内容字节一致。
+func TestIllegalCharNameReallyLands(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	const orig = "录像:2026-09-05<b>1.bin"
+	const want = "录像_2026-09-05_b_1.bin"
+	payload := bytes.Repeat([]byte("0123456789abcdef"), 8) // 128 字节
+	size := int64(len(payload))
+
+	mustOK(t, http.MethodPost, ts.URL+"/api/upload/chunk?name="+urlEncode(orig)+"&index=0&size="+strconv.FormatInt(size, 10), payload)
+	mustOK(t, http.MethodPost, ts.URL+"/api/upload/complete?name="+urlEncode(orig)+"&size="+strconv.FormatInt(size, 10), nil)
+
+	got, err := os.ReadFile(filepath.Join(srv.Dir(), want))
+	if err != nil {
+		t.Fatalf("清洗后的文件没落到盘上: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("落盘内容 %d 字节，与上传的 %d 字节不一致", len(got), len(payload))
+	}
+	// 原始名不允许出现在目录里（哪怕是个空壳）
+	if _, err := os.Stat(filepath.Join(srv.Dir(), orig)); err == nil {
+		t.Errorf("目录里仍能看到原始名 %q", orig)
 	}
 }
 
@@ -239,6 +297,138 @@ func TestSetDirRefusedWhileUploadPending(t *testing.T) {
 	if srv.Dir() != filepath.Clean(next) {
 		t.Errorf("Dir() = %q，期望 %q", srv.Dir(), next)
 	}
+}
+
+// sampleContent 生成长度固定、可预测的内容。mid=true 时只翻转中间那个取样窗口，
+// 头尾字节完全一致——正是「同名 + 同大小」判重会漏掉、而取样指纹能抓住的情形。
+func sampleContent(size int, mid bool) []byte {
+	b := make([]byte, size)
+	for i := range b {
+		b[i] = byte(i*7 + 1)
+	}
+	if mid {
+		offs := sampleOffsets(int64(size))
+		start, n := offs[1], int64(0)
+		n = int64(size) - start
+		if n > sampleWindow {
+			n = sampleWindow
+		}
+		for i := start; i < start+n; i++ {
+			b[i] ^= 0xff
+		}
+	}
+	return b
+}
+
+// TestStatusRequiresMatchingFingerprint 曾经的静默丢文件路径：同名同大小的文件
+// 内容不同，status 直接回 complete=true，前端显示「本机已有相同内容」，
+// 而字节一个都没传。现在快速路径必须指纹相符才走。
+func TestStatusRequiresMatchingFingerprint(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	const size = 200000
+	a := sampleContent(size, false)
+	b := sampleContent(size, true)
+
+	tmp := t.TempDir()
+	fa, fb := filepath.Join(tmp, "a.bin"), filepath.Join(tmp, "b.bin")
+	if err := os.WriteFile(fa, a, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fb, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fpA, err := fingerprintFile(fa, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fpB, err := fingerprintFile(fb, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fpA == fpB {
+		t.Fatal("只在中间窗口不同的两份内容算出了同一个指纹")
+	}
+
+	const name = "报告.bin"
+	qs := func(fp string) string {
+		u := "?name=" + urlEncode(name) + "&size=" + strconv.Itoa(size)
+		if fp != "" {
+			u += "&fp=" + fp
+		}
+		return u
+	}
+	statusComplete := func(t *testing.T, fp string) bool {
+		t.Helper()
+		body := mustOK(t, http.MethodGet, ts.URL+"/api/upload/status"+qs(fp), nil)
+		var j struct {
+			Complete bool `json:"complete"`
+		}
+		if err := json.Unmarshal([]byte(body), &j); err != nil {
+			t.Fatalf("解析 status 响应失败: %v / %s", err, body)
+		}
+		return j.Complete
+	}
+
+	mustOK(t, http.MethodPost, ts.URL+"/api/upload/chunk"+qs("")+"&index=0", a)
+	mustOK(t, http.MethodPost, ts.URL+"/api/upload/complete"+qs(""), nil)
+
+	if !statusComplete(t, fpA) {
+		t.Error("指纹相符却未判定完成，重复上传的跳过优化失效")
+	}
+	if statusComplete(t, fpB) {
+		t.Error("指纹不符仍判定完成 —— 会静默丢掉用户刚发的文件")
+	}
+	if statusComplete(t, "") {
+		t.Error("不带指纹仍判定完成 —— 旧客户端会覆盖式跳过")
+	}
+
+	// 同名同大小、内容不同的第二份必须真的传完并自动改名
+	mustOK(t, http.MethodPost, ts.URL+"/api/upload/chunk"+qs(fpB)+"&index=0", b)
+	body := mustOK(t, http.MethodPost, ts.URL+"/api/upload/complete"+qs(fpB), nil)
+	var done struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(body), &done); err != nil {
+		t.Fatalf("解析 complete 响应失败: %v / %s", err, body)
+	}
+	if done.Name != "报告 (1).bin" {
+		t.Errorf("complete 回的名字是 %q，期望 报告 (1).bin", done.Name)
+	}
+	saved, err := os.ReadFile(filepath.Join(srv.Dir(), "报告 (1).bin"))
+	if err != nil {
+		t.Fatalf("第二份内容没有落盘: %v", err)
+	}
+	if !bytes.Equal(saved, b) {
+		t.Error("落盘的第二份内容与上传的字节不一致")
+	}
+	first, err := os.ReadFile(filepath.Join(srv.Dir(), name))
+	if err != nil || !bytes.Equal(first, a) {
+		t.Error("原有的第一份文件被改动了")
+	}
+}
+
+func mustOK(t *testing.T, method, url string, body []byte) string {
+	t.Helper()
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s %s -> HTTP %d: %s", method, url, resp.StatusCode, buf.String())
+	}
+	return buf.String()
 }
 
 func urlEncode(s string) string {

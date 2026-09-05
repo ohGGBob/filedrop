@@ -26,6 +26,74 @@ func chunkCount(size int64) int {
 	return int((size + chunkSize - 1) / chunkSize)
 }
 
+// 内容取样指纹：对文件头 / 中 / 尾三个窗口做双 lane FNV-1a，输出 16 位十六进制。
+// 它只是「重复上传可以跳过」的提示，不是完整性校验——真正的判定在 complete
+// 比对 SHA-256。算法必须与前端 / fdtest 逐字节一致。
+const sampleWindow = 64 * 1024
+
+// sampleOffsets 返回三个取样窗口的起点。小文件上窗口会重叠，只要三端算法
+// 用同一套偏移，重叠不影响一致性判断。
+func sampleOffsets(size int64) [3]int64 {
+	half := size / 2
+	if half > sampleWindow/2 {
+		half -= sampleWindow / 2
+	}
+	tail := size - sampleWindow
+	if tail < 0 {
+		tail = 0
+	}
+	return [3]int64{0, half, tail}
+}
+
+func fnv1a(h uint32, b []byte) uint32 {
+	for _, c := range b {
+		h ^= uint32(c)
+		h *= 0x01000193
+	}
+	return h
+}
+
+// fingerprintOf 由三个取样窗口算出指纹；size 参与混合，避免
+// 「窗口字节相同但总长不同」被误判为同一份内容。
+func fingerprintOf(size int64, windows [3][]byte) string {
+	var h1, h2 uint32 = 0x811c9dc5, 0x01000193
+	mix := func(b []byte) {
+		h1 = fnv1a(h1, b)
+		h2 = fnv1a(h2^uint32(len(b)), b)
+	}
+	var sz [8]byte
+	for i := 0; i < 8; i++ {
+		sz[i] = byte(uint64(size) >> (8 * i))
+	}
+	mix(sz[:])
+	for _, b := range windows {
+		mix(b)
+	}
+	return fmt.Sprintf("%08x%08x", h1, h2)
+}
+
+// fingerprintFile 从已落盘的完整文件算指纹。
+func fingerprintFile(path string, size int64) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	var ws [3][]byte
+	for i, off := range sampleOffsets(size) {
+		n := size - off
+		if n > sampleWindow {
+			n = sampleWindow
+		}
+		b := make([]byte, n)
+		if _, err := f.ReadAt(b, off); err != nil && err != io.EOF {
+			return "", err
+		}
+		ws[i] = b
+	}
+	return fingerprintOf(size, ws), nil
+}
+
 // 残留文件名编码规则：<原文件名>.<文件字节数>.part[.bits]
 //
 // 关键点：把 size 编进文件名。否则「同名文件、不同大小」的两次上传会共用同一份
@@ -107,13 +175,19 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	dir := s.Dir()
 
-	// 同名完整文件已存在 → 直接判定完成
+	// 同名同大小的完整文件已存在，且客户端带的取样指纹对得上 → 才敢直接判完成。
+	// 只看「同名 + 同大小」不够：那正是「改了内容重新导出一份」最容易撞上的组合，
+	// 直接跳过等于把用户刚发的文件悄悄丢掉。
 	if fi, e := os.Stat(filepath.Join(dir, name)); e == nil && fi.Size() == size {
-		jsonOK(w, map[string]any{
-			"received": size, "total": chunkCount(size), "chunkSize": chunkSize,
-			"missing": []int{}, "complete": true,
-		})
-		return
+		if fp := r.URL.Query().Get("fp"); len(fp) == 16 {
+			if got, e := fingerprintFile(filepath.Join(dir, name), size); e == nil && strings.EqualFold(got, fp) {
+				jsonOK(w, map[string]any{
+					"received": size, "total": chunkCount(size), "chunkSize": chunkSize,
+					"missing": []int{}, "complete": true, "name": name,
+				})
+				return
+			}
+		}
 	}
 
 	bits := loadBitmap(dir, name, size)

@@ -50,6 +50,49 @@ type statusResp struct {
 	Error     string `json:"error"`
 }
 
+// 取样指纹：与 core/upload.go 的 sampleOffsets / fingerprintOf 逐字节一致。
+// 服务端只认带指纹的「本机已存有同一份内容」，不带 fp 一律按全新上传处理。
+const sampleWindow = 64 * 1024
+
+func fnv1a(h uint32, b []byte) uint32 {
+	for _, c := range b {
+		h ^= uint32(c)
+		h *= 0x01000193
+	}
+	return h
+}
+
+func fingerprintAt(f *os.File, size int64) string {
+	half := size / 2
+	if half > sampleWindow/2 {
+		half -= sampleWindow / 2
+	}
+	tail := size - sampleWindow
+	if tail < 0 {
+		tail = 0
+	}
+	var h1, h2 uint32 = 0x811c9dc5, 0x01000193
+	mix := func(b []byte) {
+		h1 = fnv1a(h1, b)
+		h2 = fnv1a(h2^uint32(len(b)), b)
+	}
+	var sz [8]byte
+	for i := 0; i < 8; i++ {
+		sz[i] = byte(uint64(size) >> (8 * i))
+	}
+	mix(sz[:])
+	for _, off := range [3]int64{0, half, tail} {
+		n := size - off
+		if n > sampleWindow {
+			n = sampleWindow
+		}
+		b := make([]byte, n)
+		_, _ = f.ReadAt(b, off)
+		mix(b)
+	}
+	return fmt.Sprintf("%08x%08x", h1, h2)
+}
+
 func up(base, token, path string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -66,7 +109,8 @@ func up(base, token, path string) {
 	// 1) 查询缺块列表
 	var st statusResp
 	{
-		u := fmt.Sprintf("%s/api/upload/status?name=%s&size=%d", base, url.QueryEscape(name), size)
+		fp := fingerprintAt(f, size)
+		u := fmt.Sprintf("%s/api/upload/status?name=%s&size=%d&fp=%s", base, url.QueryEscape(name), size, fp)
 		resp, e := http.Get(u)
 		if e != nil {
 			fail(e)
@@ -82,7 +126,7 @@ func up(base, token, path string) {
 	}
 	buf := make([]byte, chunkSize)
 	if st.Complete {
-		fmt.Println("已存在同名完整文件，跳过上传")
+		fmt.Println("已存在内容指纹一致的完整文件，跳过上传")
 	} else {
 		missing := st.Missing
 		fmt.Printf("上传 %s  size=%d  total=%d块  缺 %d 块\n", name, size, st.Total, len(missing))

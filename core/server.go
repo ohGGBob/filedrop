@@ -461,7 +461,7 @@ var winReserved = map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": 
 
 // safeName 把客户端给的任意字符串收敛成一个安全的纯文件名，返回 "" 表示不可用。
 //
-// 四道关卡，缺一不可：
+// 五道关卡，缺一不可：
 //  1. 只取 basename 并剔掉分隔符，挡掉 ../../etc/passwd 式穿越。注意
 //     filepath.Base("..") 返回的仍是 ".."，必须显式拒绝，否则
 //     filepath.Join(dir, "..") 直接指到接收目录的上一级去。
@@ -469,6 +469,11 @@ var winReserved = map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": 
 //     下载处理函数就此卡死、白占一个连接（CON / COM1 / nul.txt 同理）。
 //  3. 拒绝结尾的点与空格——NTFS 根本建不出这样的文件。
 //  4. 限制长度。
+//  5. 清洗 Windows 文件名非法字符 < > : " | ? * 与控制字符。这些字符在
+//     macOS / 安卓上合法，直接落盘会撞出两种更糟的结果：CreateFile 报错变成
+//     看不懂的 500；或 `a:b` 被当成 NTFS 交替数据流——接口返回 200，字节却写
+//     进 a 这个文件的数据流里，目录中只留下一个空的 a。就地换成下划线，
+//     complete 会把真实文件名回给前端显示。
 func safeName(s string) string {
 	s = filepath.Base(s)
 	s = strings.ReplaceAll(s, "/", "")
@@ -482,6 +487,7 @@ func safeName(s string) string {
 	if len(s) > maxNameBytes {
 		return ""
 	}
+	s = sanitizeIllegalChars(s)
 	stem := s // 设备名看第一个点之前的部分："nul.txt" 在 Windows 上同样是设备
 	if i := strings.IndexByte(stem, '.'); i >= 0 {
 		stem = stem[:i]
@@ -496,6 +502,25 @@ func safeName(s string) string {
 		}
 	}
 	return s
+}
+
+// sanitizeIllegalChars 把 Windows 不允许出现在文件名里的字符换成下划线。
+// 非法字符全是 ASCII，而 UTF-8 多字节序列的每个字节都 >= 0x80，
+// 所以逐字节扫描不会拆坏中文文件名。
+func sanitizeIllegalChars(s string) string {
+	const illegal = `<>:"|?*`
+	b := []byte(s)
+	hit := false
+	for i, c := range b {
+		if c < 0x20 || c == 0x7f || strings.IndexByte(illegal, c) >= 0 {
+			b[i] = '_'
+			hit = true
+		}
+	}
+	if !hit {
+		return s
+	}
+	return string(b)
 }
 
 // badName 统一「文件名不可用」的响应文案，供各写接口复用。
