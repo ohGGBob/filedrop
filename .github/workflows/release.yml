@@ -1,0 +1,129 @@
+name: Release
+
+# 推送 v* 标签时：构建 Windows 双 exe + 安卓 APK，汇总发布 GitHub Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Build filedrop.exe / filedrop-tray.exe
+        shell: pwsh
+        run: |
+          go build -trimpath -ldflags "-s -w" -o filedrop.exe .
+          go build -trimpath -ldflags "-s -w" -o filedrop-tray.exe ./tray
+
+      - name: Smoke test (headless server)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\filedrop.exe -ArgumentList '-port','28999','-no-auth' -PassThru
+          Start-Sleep 2
+          $info = Invoke-RestMethod -Uri 'http://127.0.0.1:28999/api/info'
+          Write-Host "version=$($info.version)"
+          if ($info.version -notmatch '^\d+\.\d+\.\d+$') { throw 'bad version' }
+          Stop-Process -Id $p.Id -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            filedrop.exe
+            filedrop-tray.exe
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install gomobile & gobind (pinned)
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@d5bb5ecc55c03634c30adcf688f9a2482006dcb0
+          go install golang.org/x/mobile/cmd/gobind@d5bb5ecc55c03634c30adcf688f9a2482006dcb0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27b
+          add-to-path: false
+
+      - name: gomobile init & bind
+        run: |
+          export ANDROID_NDK_HOME="${{ steps.ndk.outputs.ndk-path }}"
+          gomobile init
+          gomobile bind -target=android -androidapi 26 \
+            -o android/app/libs/filedrop.aar ./mobile
+
+      - name: Build APK (signed)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Gradle assembleRelease
+        run: |
+          cd android
+          gradle assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk filedrop-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: filedrop-android.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/windows/filedrop.exe
+            artifacts/windows/filedrop-tray.exe
+            artifacts/android/filedrop-android.apk
+          body: |
+            **FileDrop ${{ github.ref_name }} —— 局域网文件快传**
+
+            - **Windows**：下载 `filedrop-tray.exe`（托盘版，推荐）或 `filedrop.exe`（无界面版），
+              双击运行，手机/平板浏览器扫页面上的二维码即可互传。
+            - **Android**：下载 `filedrop-android.apk` 安装（设置里允许安装未知来源应用）。
+              打开 App 即成为主机，电脑/其他设备扫 App 页面上的二维码连进来。
+
+            互传组合：手机 ↔ 电脑、手机 ↔ 平板、平板 ↔ 电脑 —— 谁开服务谁是主机，其余设备扫码加入。
+
+            首次运行 Windows 版会被 SmartScreen 提示（未做代码签名），选择「仍要运行」即可。

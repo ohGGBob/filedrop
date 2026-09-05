@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.ohggbob.filedrop'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.ohggbob.filedrop"
+        minSdk 26
+        targetSdk 35
+        versionCode 6
+        versionName "0.6.0"
+    }
+
+    // 自签 keystore 随仓库提交：保证任何人构建出的 APK 签名一致，可覆盖升级。
+    // 这是局域网互传工具，keystore 不承担安全职责，固定密码仅为可复现构建。
+    signingConfigs {
+        release {
+            storeFile rootProject.file("release.keystore")
+            storePassword "filedrop2026"
+            keyAlias "filedrop"
+            keyPassword "filedrop2026"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation files('libs/filedrop.aar')
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

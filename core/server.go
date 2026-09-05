@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"embed"
@@ -60,7 +61,11 @@ type Server struct {
 	peers      *peerTable
 	access     *peerAccess
 	disc       *net.UDPConn
+	discDone   chan struct{}
 	discErr    error // 发现通道没开成时，界面要好话说清为什么
+
+	// httpSrv 由 ListenAndServe 记录，供 Shutdown 优雅停机用。
+	httpSrv *http.Server
 }
 
 // New 创建实例并生成配对令牌；接收目录不可写时自动回退到用户目录下的 FileDrop。
@@ -135,7 +140,20 @@ func (s *Server) ListenAndServe() error {
 		ReadTimeout:       0, // 大文件传输不限时
 		WriteTimeout:      0,
 	}
+	s.httpSrv = srv
 	return srv.ListenAndServe()
+}
+
+// Shutdown 优雅停机：关掉监听与全部连接、停掉发现广播。
+// 安卓 App 在界面销毁时调用，避免服务残留在后台占着端口。
+func (s *Server) Shutdown() error {
+	s.stopDiscovery()
+	if srv := s.httpSrv; srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return srv.Shutdown(ctx)
+	}
+	return nil
 }
 
 // ---------- 路由 ----------

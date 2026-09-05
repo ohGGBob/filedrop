@@ -1,14 +1,28 @@
 # FileDrop · 局域网文件快传
 
-在**同一 WiFi / 局域网**下，电脑做中心，手机 / 平板用浏览器**零安装**互传文件。
+在**同一 WiFi / 局域网**下，任意设备互传文件：电脑、手机、平板——手机装个 App（或只用浏览器），电脑开个 exe。
 专为个人 1–4GB 级别大文件设计：自动分块、断点续传、SHA-256 校验、配对令牌防误传。
 顺带一条**文本快传**通道：验证码、命令、地址不用包装成文件，粘过去对面一键复制。
 还能**互相看见**：页面上列出同网的其他 FileDrop 设备，点「请求上传」由对方屏幕上的人批准，
 换一枚只认本机 IP、半小时过期的临时写授权。
 
 ## 适用场景
-- 手机 → 电脑、电脑 → 手机、手机 → 平板（都以电脑为中转枢纽）
+- 手机 ↔ 电脑、手机 ↔ 平板、平板 ↔ 电脑 —— **谁开服务谁是主机**，其余设备扫码加入
+- 主机可以是电脑（双击 exe），也可以是手机（打开 App）；不装 App 的设备用浏览器扫码即可
 - 设备基本在同一局域网；跨网场景暂需额外打洞/中继（后续做）
+
+## 下载安装（GitHub Releases）
+到 [Releases](https://github.com/ohGGBob/filedrop/releases/latest) 下载：
+
+| 平台 | 文件 | 用法 |
+| --- | --- | --- |
+| Windows | `filedrop-tray.exe` | 双击运行（托盘图标，推荐） |
+| Windows | `filedrop.exe` | 双击运行（无界面版，控制台打印地址） |
+| Android | `filedrop-android.apk` | 安装后打开即用（允许「未知来源应用」） |
+
+- 首次运行 Windows 版会被 SmartScreen 拦一下（未做代码签名），点「更多信息 → 仍要运行」。
+- Android 端下载的文件保存在 `下载/FileDrop/`；接收目录默认 App 私有目录，可在页面里改。
+- 每次发布由 GitHub Actions 自动构建：Windows 双 exe + 安卓 APK（gomobile 编译内嵌 Go 服务端 + WebView 壳）。
 
 ## 目录结构
 ```
@@ -24,6 +38,9 @@ filedrop/
 │   └── web/           # 前端（原生 JS），通过 go:embed 编进二进制
 ├── tray/
 │   └── main.go        # Windows 托盘入口（自包含，内嵌服务端）
+├── mobile/
+│   └── mobile.go      # gobind 桥接：Start/Stop，供安卓 App 启动内嵌服务端
+├── android/           # 安卓壳工程（Kotlin + WebView，gomobile bind 出的 .aar 由 CI 生成）
 ├── testclient/        # 自测客户端（分块协议参考实现）
 ├── received/          # 接收文件落盘目录（运行时在 exe 旁自动创建）
 ├── filedrop.exe       # 单文件成品（前端已内嵌，拷到哪都能跑）

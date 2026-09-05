@@ -495,8 +495,22 @@ func (s *Server) StartDiscovery() {
 		return
 	}
 	s.disc = conn
+	done := make(chan struct{})
+	s.discDone = done
 	go s.readBeacons(conn)
-	go s.beaconLoop(conn)
+	go s.beaconLoop(conn, done)
+}
+
+// stopDiscovery 关闭发现通道并让广播 goroutine 退出。App 停机时调用。
+func (s *Server) stopDiscovery() {
+	if s.discDone != nil {
+		close(s.discDone)
+		s.discDone = nil
+	}
+	if s.disc != nil {
+		_ = s.disc.Close()
+		s.disc = nil
+	}
 }
 
 func (s *Server) selfBeacon(t string) beacon {
@@ -505,11 +519,16 @@ func (s *Server) selfBeacon(t string) beacon {
 
 // beaconLoop 定期广播自我介绍；每隔一个周期顺带问一次「有谁在」，
 // 这样刚启动的实例不必等到下一轮才有对端可听。
-func (s *Server) beaconLoop(conn *net.UDPConn) {
+func (s *Server) beaconLoop(conn *net.UDPConn, done <-chan struct{}) {
 	tick := time.NewTicker(discInterval)
 	defer tick.Stop()
 	n := 0
-	for range tick.C {
+	for {
+		select {
+		case <-done: // 停机：通道已关，别再广播
+			return
+		case <-tick.C:
+		}
 		n++
 		s.sendAll(conn, s.selfBeacon("iam"))
 		if n%2 == 0 {
