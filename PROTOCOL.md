@@ -1,4 +1,4 @@
-# FileDrop 传输协议契约（v0.4）
+# FileDrop 传输协议契约（v0.5）
 
 前后端约定的 HTTP 接口。所有接口相对当前页面 origin（同源），手机 / 电脑共用同一套前端。
 
@@ -131,15 +131,52 @@ Content-Disposition: attachment; filename="<ascii 兜底>"; filename*=UTF-8''<�
   写 `.tmp` 再 `os.Rename` 原子替换；文件损坏时按空处理而不是让整个接口 500。
 - 前端渲染一律用 `textContent`，正文里的 `<img onerror=…>` 不会变成元素（已实测）。
 
+## 局域网设备发现与临时写授权（v0.5）
+目标是「同一 WiFi 下两台电脑互相看得见，并且能往对面传东西」，但**不能**因此把配对令牌暴露在广播里——
+发现报文会被同网任何主机收到，而令牌一旦泄漏就等于终身写权限。所以拆成两层：
+
+### 1. 发现层：UDP 广播，不带任何凭证
+- 端口 **45581**，所有实例共用（共用才互相听得到）。包体是一行 JSON：
+  `{"m":"filedrop/1","t":"iam"|"whois","id":...,"name":...,"host":...,"port":...,"ver":...}`
+  `m` 不匹配的包一眼扔掉，避免把别的 UDP 流量误当设备。
+- 每 3 秒广播一次 `iam`，每两个周期补一次 `whois`（刚启动的实例不必等下一轮）；
+  发送目标 = `255.255.255.255` + 本机 /24 定向广播 + 已知对端的单播。
+- 15 秒（三个周期）没听到就当对方下线；**手动添加的条目不淘汰**。
+- `id` 是进程级随机值，重启即换：否则同一台机器跑过两个实例后，旧列表里会认错了机器。
+- 收到的 `iam` 必须 `net.ParseIP(host)` 通过才入表：host 来自网络，会被拼成界面里可点的链接。
+- 端口被占（同机第二个实例）时**只记录 `discover_error`，绝不阻断启动**：文件传输本身不受影响，
+  界面据此提示改用「手动添加」。
+
+### 2. 授权层：人对人点头，换一枚临时授权
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/peers` | `{ self:{name,id,port,ip}, peers:[{id,name,host,port,url,version,via,seen_ms}], listening, discover_error }`；读接口，不含凭证 |
+| `POST /api/peers?t=&to=IP:端口` | 手动添加：先探对面 `GET /api/info`，确认真是 FileDrop 才入表（**需写权限**） |
+| `POST /api/peer/handshake?name=` | **被请求方**入口。**不要求令牌**（要令牌就成了先有鸡先有蛋）。挂起最多 90 秒等本机屏幕上有人点按钮 |
+| `GET /api/peer/pending?t=` | 本机待批准列表 `[{ip,name,at}]`（**需写权限**） |
+| `POST /api/peer/decide?t=&ip=&ok=1\|0` | 本机点「允许 / 拒绝」（**需写权限**） |
+| `POST /api/peer/request?t=&to=IP:端口` | **请求方**入口：由本机服务端去敲对面的 handshake，回 `{grant,url,expires_ms}`（**需写权限**） |
+
+- 批准换来的授权 `?g=`：**绑来源 IP、30 分钟过期、最多同时 8 枚**，写权限范围与令牌相同（上传 / 改名 / 删除 / 便签 / 切目录）。
+  来源 IP 变了立刻 403，伪造授权同样 403。授权表只放内存，不写配置文件。
+- 同一 IP 再次 handshake 直接复用已有授权，不重复弹窗（`findFor`）。
+- 同一 IP 并发两个 handshake：后来者顶掉先来者（先来者收 403），后来者的待批准条目必须留在队列里
+  ——收尾只能按对象身份删自己那条（`releasePending`），按 IP 删会把新的擦掉，导致后来者干等到超时。
+- 批准接口要求本机写权限，否则任何同网主机都能替屏幕前的人按下「允许」。
+- `to` 只接受 **IP 字面量:端口**：放进域名就等于给本机加了个内网探测器。
+- 请求方拿到 `url`（形如 `http://<对端IP>:<端口>/?g=<授权>`）后**整页跳转**过去。
+  之后所有请求仍是同源，因此**不需要开 CORS**，也不引入「任意站点可以让浏览器代发请求」的口子。
+- `handshakeWait` 做成包级变量（默认 90s），单测压到毫秒级，不然测超时就要真等一分半。
+
 ## 其他
 | 接口 | 说明 |
 | --- | --- |
 | `GET /api/info` | `{ ip, port, url, version }` |
-| `GET /api/events` | SSE 流：文件变动推 `{"type":"files"}`，便签变动推 `{"type":"notes"}`，多设备实时刷新 |
+| `GET /api/events` | SSE 流：文件变动 `{"type":"files"}`、便签变动 `{"type":"notes"}`、设备上下线 `{"type":"peers"}`、有人等待批准 `{"type":"peer_request","ip":...,"name":...}` |
 | `GET /api/qr?text=&size=` | 返回连接地址二维码 PNG |
-| `GET/POST /api/settings` | 读取 / 切换接收目录（POST 需令牌），写入 exe 同级 `filedrop-config.json` |
-| `POST /api/open-folder` | 在资源管理器打开接收目录 |
-| `POST /api/pick-folder` | 弹 Windows 原生文件夹选择对话框（仅 Windows） |
+| `GET/POST /api/settings` | 读取 / 切换接收目录（POST 需写权限），写入 exe 同级 `filedrop-config.json` |
+| `POST /api/open-folder?t=` | 在资源管理器打开接收目录（需写权限） |
+| `POST /api/pick-folder?t=` | 弹 Windows 原生文件夹选择对话框（仅 Windows，需写权限） |
 
 ### 切换接收目录的约束
 有未传完的 `.part` 时 `POST /api/settings` **拒绝切换**并返回残留条数。

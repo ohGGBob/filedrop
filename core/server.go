@@ -31,7 +31,7 @@ import (
 var webFS embed.FS
 
 // Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘。
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // Server 是一个 FileDrop 实例。
 type Server struct {
@@ -52,6 +52,15 @@ type Server struct {
 	// notesMu 单独保护便签文件。它和 s.mu 管的是互不相干的东西，
 	// 分开放就不会出现「写一段便签要等某个 GB 级分块落盘」。
 	notesMu sync.Mutex
+
+	// 设备发现：id 是本实例的随机标识（重启即换，避免旧列表里认错了机器），
+	// deviceName 用主机名，只为了在别人的列表里看得懂这是哪台。
+	id         string
+	deviceName string
+	peers      *peerTable
+	access     *peerAccess
+	disc       *net.UDPConn
+	discErr    error // 发现通道没开成时，界面要好话说清为什么
 }
 
 // New 创建实例并生成配对令牌；接收目录不可写时自动回退到用户目录下的 FileDrop。
@@ -71,7 +80,11 @@ func New(port int, dir string, noAuth bool) *Server {
 			}
 		}
 	}
-	return &Server{Port: port, dir: dir, NoAuth: noAuth, token: randHex(16), ip: lanIP(), hub: newEventHub()}
+	return &Server{
+		Port: port, dir: dir, NoAuth: noAuth, token: randHex(16), ip: lanIP(), hub: newEventHub(),
+		id: randHex(8), deviceName: deviceNameOf(),
+		peers: newPeerTable(), access: newPeerAccess(),
+	}
 }
 
 // Dir 返回当前接收目录的快照。
@@ -114,6 +127,7 @@ func (s *Server) Handler() http.Handler {
 
 // ListenAndServe 阻塞监听；托盘等场景可在 goroutine 中调用。
 func (s *Server) ListenAndServe() error {
+	s.StartDiscovery()
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("0.0.0.0:%d", s.Port),
 		Handler:           s.Handler(),
@@ -149,6 +163,16 @@ func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		s.partialsHandler(w, r)
 	case "/api/notes":
 		s.notesHandler(w, r)
+	case "/api/peers":
+		s.peersHandler(w, r)
+	case "/api/peer/handshake":
+		s.handshakeHandler(w, r)
+	case "/api/peer/pending":
+		s.pendingHandler(w, r)
+	case "/api/peer/decide":
+		s.decideHandler(w, r)
+	case "/api/peer/request":
+		s.requestHandler(w, r)
 	case "/api/download":
 		s.download(w, r)
 	case "/api/events":
@@ -202,6 +226,10 @@ func (s *Server) canWrite(r *http.Request) bool {
 		return true
 	}
 	if t := r.URL.Query().Get("t"); t != "" && t == s.token {
+		return true
+	}
+	// 对端批准过的临时授权：绑来源 IP 且会过期，比终身有效的配对令牌收敛。
+	if g := r.URL.Query().Get("g"); g != "" && s.access.valid(g, peerIP(r)) {
 		return true
 	}
 	return isLoopback(r)

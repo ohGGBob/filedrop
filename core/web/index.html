@@ -94,6 +94,20 @@
   }
   .nact { border: none; background: none; padding: 0; font-size: 12px; color: var(--brand); cursor: pointer; }
   .nact.danger { color: var(--err); }
+  /* 局域网设备发现 */
+  .peers { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .peer { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .phead { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .phead > b { font-weight: 600; }
+  .phead > .spacer { flex: 1 1 auto; }
+  .banner {
+    position: sticky; top: 0; z-index: 20; margin-bottom: 18px;
+    background: #fff8e6; border: 1px solid #f0dca8; border-left: 4px solid var(--warn);
+    border-radius: 12px; padding: 12px 16px;
+  }
+  .banner .btitle { font-weight: 600; margin-bottom: 8px; }
+  .arow { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .arow > span { flex: 1 1 auto; min-width: 0; }
 </style>
 </head>
 <body>
@@ -102,6 +116,11 @@
   <span class="sub">局域网文件快传 · 手机/平板零安装</span>
 </header>
 <main>
+  <section class="banner" id="peerAsk" hidden>
+    <div class="btitle">有设备想给你传文件</div>
+    <div id="peerAskList"></div>
+  </section>
+
   <section class="card">
     <h2>本机连接地址</h2>
     <div class="addr">
@@ -165,6 +184,19 @@
     </div>
     <div id="noteList" class="notes"></div>
     <div class="hint">便签存在程序同级的 filedrop-notes.json，不进接收目录也不混进文件列表，最多留 200 条。读写都要配对令牌——办公室 WiFi 上别人看不到你传的验证码。</div>
+  </section>
+
+  <section class="card">
+    <h2>局域网里的其他 FileDrop</h2>
+    <div id="peerSelf" class="meta"></div>
+    <div id="peerAskInline" class="hint" style="display:none;">本页没有写权限，看不到待确认请求。要批准别人的上传，请在<b>这台电脑</b>上用 http://127.0.0.1:端口 或带令牌地址打开本页。</div>
+    <div class="row" style="margin-top:10px;">
+      <input id="peerAddr" type="text" placeholder="手动添加：192.168.1.20:28080" style="flex:1 1 240px;min-width:200px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;" />
+      <button id="peerAdd">添加</button>
+    </div>
+    <div id="peerList" class="peers"><div class="empty">扫描中…</div></div>
+    <div id="peerStatus" class="meta"></div>
+    <div class="hint">设备之间靠 UDP 广播互相发现（端口 45581），广播里只有名字、IP、端口和版本，<b>不含配对令牌</b>。要对岸收文件，点「请求上传」——对方屏幕上会弹出允许 / 拒绝，批准后得到一个只认你这台机器 IP、半小时过期的临时授权，然后自动跳到它的页面上传。跨网段、AP 屏蔽广播或防火墙拦截时，用上面的「手动添加」。</div>
   </section>
 
   <section class="card" id="partialCard">

@@ -3,6 +3,16 @@
 
 const CHUNK = 8 * 1024 * 1024; // 8 MiB
 const token = new URLSearchParams(location.search).get('t') || '';
+// 对端批准的临时写授权：跳进别人页面时带在 ?g= 上，绑本机 IP、会过期，权限范围与令牌相同。
+const grant = new URLSearchParams(location.search).get('g') || '';
+
+// authPair 生成写请求的鉴权查询项（不含分隔符）。令牌优先：两端都有时说明这是自己人的页面，
+// 用终身令牌不必担心授权半小时后过期。无凭证时返回空串，调用方拼出的仍是合法 URL。
+function authPair() {
+  if (token) return 't=' + encodeURIComponent(token);
+  if (grant) return 'g=' + encodeURIComponent(grant);
+  return '';
+}
 
 const $ = (id) => document.getElementById(id);
 const drop = $('drop'), fileInput = $('file'), upBar = $('upBar'), upStatus = $('upStatus');
@@ -117,6 +127,8 @@ function escapeHtml(s) {
 // v0.4：队列化。此前每选一次文件就新起一条 Promise 链，两条链同时写同一个进度条
 //       和状态行，数字会来回跳；而且 4GB 的传输一旦开始就停不下来。
 const isLocal = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+// 本机回环地址服务默认放行（NoAuth 场景），其余来源必须带令牌或对端授权。
+const canWriteHere = () => !!(token || grant || isLocal);
 const CONC = 3; // 单文件内的分块并发度：3 路大致能压满 5GHz WiFi，再高手机侧反而堵
 
 const queueEl = $('upQueue'), summaryEl = $('upSummary');
@@ -268,8 +280,8 @@ function retryTask(t) {
 function enqueueFiles(fileList) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
-  if (!token && !isLocal) {
-    setStatus('当前页面没有上传令牌：请用电脑上显示的「带令牌地址」打开本页后再上传。');
+  if (!canWriteHere()) {
+    setStatus('当前页面没有写权限：请用电脑上显示的「带令牌地址」打开本页，或在对方设备上点「请求上传」并取得批准。');
     return;
   }
   const empties = files.filter((f) => f.size === 0).map((f) => f.name);
@@ -292,7 +304,7 @@ async function runTask(t) {
 
   const { name, size } = t;
   const signal = t.controller.signal;
-  const chunkURL = (i) => '/api/upload/chunk?t=' + encodeURIComponent(token) +
+  const chunkURL = (i) => '/api/upload/chunk?' + authPair() +
     '&name=' + encodeURIComponent(name) + '&index=' + i + '&size=' + size;
   const sendChunk = async (i) => {
     const begin = i * CHUNK, end = Math.min(begin + CHUNK, size);
@@ -349,7 +361,7 @@ async function runTask(t) {
 
   // 3) 收尾；服务端可能回 missing 让补传
   for (let attempt = 0; attempt < 3; attempt++) {
-    const r = await fetch('/api/upload/complete?t=' + encodeURIComponent(token) +
+    const r = await fetch('/api/upload/complete?' + authPair() +
       '&name=' + encodeURIComponent(name) + '&size=' + size, { method: 'POST', signal });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
@@ -430,7 +442,8 @@ fileListEl.addEventListener('click', async (e) => {
   if (!a) return;
   e.preventDefault();
   const name = a.dataset.name;
-  const tqs = token ? '&t=' + encodeURIComponent(token) : '';
+  const p = authPair();
+  const tqs = p ? '&' + p : '';
   if (a.dataset.act === 'del') {
     if (!confirm('确定删除 ' + name + ' ？')) return;
     const r = await fetch('/api/files?name=' + encodeURIComponent(name) + tqs, { method: 'DELETE' });
@@ -439,7 +452,7 @@ fileListEl.addEventListener('click', async (e) => {
   } else if (a.dataset.act === 'rename') {
     const nn = prompt('新文件名：', name);
     if (!nn || nn === name) return;
-    const r = await fetch('/api/rename?t=' + encodeURIComponent(token), {
+    const r = await fetch('/api/rename?' + authPair(), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name, newName: nn })
     });
@@ -500,7 +513,7 @@ function renderNotes() {
 async function loadNotes() {
   if (!noteList) return;
   try {
-    const r = await fetch('/api/notes?t=' + encodeURIComponent(token));
+    const r = await fetch('/api/notes?' + authPair());
     if (r.status === 403) { notes = []; setNoteStatus(''); renderNotesAsDenied(); return; }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     notes = await r.json();
@@ -517,7 +530,7 @@ async function loadNotes() {
 function renderNotesAsDenied() {
   const e = document.createElement('div');
   e.className = 'empty';
-  e.textContent = '便签需要配对令牌才能读写：请用电脑上显示的「带令牌地址」打开本页。';
+  e.textContent = '便签需要写权限才能读写：请用电脑上显示的「带令牌地址」打开本页，或向对方请求上传并获批准。';
   noteList.textContent = '';
   noteList.appendChild(e);
 }
@@ -525,10 +538,10 @@ function renderNotesAsDenied() {
 async function sendNote() {
   const text = noteInput.value;
   if (!text.trim()) { setNoteStatus('先写点内容'); return; }
-  if (!token && !isLocal) { setNoteStatus('当前页面没有上传令牌，无法发送'); return; }
+  if (!canWriteHere()) { setNoteStatus('当前页面没有写权限，无法发送'); return; }
   setNoteStatus('发送中…');
   try {
-    const r = await fetch('/api/notes?t=' + encodeURIComponent(token), {
+    const r = await fetch('/api/notes?' + authPair(), {
       method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: text,
     });
     const j = await r.json().catch(() => ({}));
@@ -544,7 +557,7 @@ async function sendNote() {
 
 async function deleteNote(id) {
   try {
-    const r = await fetch('/api/notes?t=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(id), { method: 'DELETE' });
+    const r = await fetch('/api/notes?' + authPair() + '&id=' + encodeURIComponent(id), { method: 'DELETE' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     await loadNotes();
   } catch (e) {
@@ -557,6 +570,191 @@ if (noteSendBtn) {
   noteInput.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendNote(); }
   });
+}
+
+// ---- 局域网里的其他 FileDrop：发现 · 请求上传 · 批准对方 ----
+// 广播信标里不带配对令牌，所以「发现到」不等于「能上传」。路径是：
+// 本机点「请求上传」→ 对端服务端把请求挂住，等它屏幕上有人点「允许」→
+// 批准后换回一个绑本机 IP、30 分钟过期的 ?g= 授权，然后浏览器直接跳进对方页面。
+// 全程请求都只发给自己的服务端（对端那一路由服务端去敲门），所以不需要开 CORS。
+const peerSelfEl = $('peerSelf'), peerListEl = $('peerList'), peerStatusEl = $('peerStatus');
+const peerAddrEl = $('peerAddr'), peerAddBtn = $('peerAdd');
+const askBox = $('peerAsk'), askList = $('peerAskList');
+const askHint = $('peerAskInline');
+
+function setPeerStatus(t) { if (peerStatusEl) peerStatusEl.textContent = t; }
+
+function addDiv(parent, cls, text) {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  if (text !== undefined) d.textContent = text;
+  parent.appendChild(d);
+  return d;
+}
+
+// 服务端拼好的 url 已经保证是 http://IP:端口/，这里再兜一次：
+// 名字和地址来自对面机器，不能让它把「打开」变成 javascript: 之类的链接。
+function peerHref(p) {
+  if (/^http:\/\/[^\s]+$/.test(p.url || '')) return p.url;
+  return 'http://' + p.host + ':' + p.port + '/';
+}
+
+async function loadPeers() {
+  if (!peerListEl) return;
+  let j;
+  try {
+    const r = await fetch('/api/peers');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    j = await r.json();
+  } catch (e) {
+    peerListEl.textContent = '';
+    addDiv(peerListEl, 'empty', '设备列表加载失败：' + e);
+    return;
+  }
+  const self = j.self || {};
+  const list = j.peers || [];
+  if (peerSelfEl) {
+    let line = '本机：' + (self.name || '（未知）') + ' · ' + (self.ip || '?') + ':' + (self.port || '?');
+    if (!j.listening) line += ' · 自动发现未开启，只能手动添加';
+    peerSelfEl.textContent = line;
+  }
+  if (j.discover_error) setPeerStatus('自动发现不可用：' + j.discover_error + '（多半是端口被占或防火墙）');
+  peerListEl.textContent = '';
+  if (!list.length) {
+    addDiv(peerListEl, 'empty', j.listening
+      ? '还没发现其他设备。对面也要开着 FileDrop；有些 AP / 交换机会屏蔽广播，此时用上面的「手动添加」填 IP:端口。'
+      : '发现通道没开，暂无设备列表。可用「手动添加」按 IP:端口连接。');
+    return;
+  }
+  for (const p of list) peerListEl.appendChild(peerRow(p));
+}
+
+function peerRow(p) {
+  const row = document.createElement('div');
+  row.className = 'peer';
+  const head = document.createElement('div');
+  head.className = 'phead';
+  const nm = document.createElement('b');
+  nm.textContent = p.name || p.host || '未命名设备';
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = p.host + ':' + p.port +
+    (p.version ? ' · v' + p.version : '') + (p.via === 'manual' ? ' · 手动添加' : '');
+  const sp = document.createElement('span');
+  sp.className = 'spacer';
+  head.appendChild(nm); head.appendChild(meta); head.appendChild(sp);
+
+  const open = document.createElement('a');
+  open.className = 'dl';
+  open.href = peerHref(p);
+  open.target = '_blank';
+  open.rel = 'noopener';
+  open.textContent = '打开';
+  const req = document.createElement('button');
+  req.className = 'qact';
+  req.style.marginLeft = '10px';
+  req.textContent = '请求上传';
+  req.addEventListener('click', () => requestUpload(p, req));
+  head.appendChild(open); head.appendChild(req);
+  row.appendChild(head);
+  return row;
+}
+
+async function requestUpload(p, btn) {
+  if (!canWriteHere()) {
+    setPeerStatus('当前页面没有写权限，无法向对方发起请求：请用带令牌地址或本机回环地址打开本页。');
+    return;
+  }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '等待对方确认…';
+  setPeerStatus('请求已发出，请在「' + (p.name || p.host) + '」的屏幕上点「允许」（最多等 90 秒）');
+  try {
+    const r = await fetch('/api/peer/request?' + authPair() +
+      '&to=' + encodeURIComponent(p.host + ':' + p.port), { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    setPeerStatus('对方已批准，正在打开它的页面…（授权半小时内有效）');
+    if (/^http:\/\/[^\s]+$/.test(j.url || '')) setTimeout(() => { location.href = j.url; }, 700);
+  } catch (e) {
+    setPeerStatus('请求未成功：' + e);
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function addPeerManually() {
+  const to = (peerAddrEl.value || '').trim();
+  if (!to) { setPeerStatus('请填写对方地址，形如 192.168.1.20:28080'); return; }
+  peerAddBtn.disabled = true;
+  setPeerStatus('正在探测 ' + to + ' …');
+  try {
+    const r = await fetch('/api/peers?' + authPair() + '&to=' + encodeURIComponent(to), { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    setPeerStatus('已添加 ' + to);
+    peerAddrEl.value = '';
+    loadPeers();
+  } catch (e) {
+    setPeerStatus('添加失败：' + e);
+  } finally {
+    peerAddBtn.disabled = false;
+  }
+}
+
+// ---- 对方屏幕上的批准横幅 ----
+// decide / pending 都要求本机写权限：否则任何同网主机都能替屏幕前的人点「允许」。
+const pendingMaxAge = 100 * 1000; // 服务端最长挂 90 秒，超过就没人在等了
+
+async function refreshPending() {
+  if (!askBox || !askList) return;
+  if (!canWriteHere()) { showAskHint(); askBox.hidden = true; return; }
+  try {
+    const r = await fetch('/api/peer/pending?' + authPair());
+    if (r.status === 403) { showAskHint(); askBox.hidden = true; return; }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    hideAskHint();
+    const now = Date.now();
+    const list = ((await r.json()) || []).filter((q) => now - (q.at || 0) < pendingMaxAge);
+    renderAsk(list);
+  } catch (_) { /* 服务重启之类，下一轮再来 */ }
+}
+
+function showAskHint() { if (askHint) askHint.style.display = ''; }
+function hideAskHint() { if (askHint) askHint.style.display = 'none'; }
+
+function renderAsk(list) {
+  askList.textContent = '';
+  if (!list.length) { askBox.hidden = true; return; }
+  askBox.hidden = false;
+  for (const q of list) {
+    const row = addDiv(askList, 'arow');
+    const span = document.createElement('span');
+    span.textContent = (q.name || '一台设备') + '（' + q.ip + '）想给你传文件';
+    const ok = document.createElement('button');
+    ok.className = 'primary';
+    ok.textContent = '允许';
+    const no = document.createElement('button');
+    no.textContent = '拒绝';
+    ok.addEventListener('click', () => decidePeer(q.ip, true, ok, no));
+    no.addEventListener('click', () => decidePeer(q.ip, false, ok, no));
+    row.appendChild(span); row.appendChild(ok); row.appendChild(no);
+  }
+}
+
+async function decidePeer(ip, ok, btnA, btnB) {
+  btnA.disabled = true; btnB.disabled = true;
+  try {
+    const r = await fetch('/api/peer/decide?' + authPair() +
+      '&ip=' + encodeURIComponent(ip) + '&ok=' + (ok ? '1' : '0'), { method: 'POST' });
+    if (!r.ok && r.status !== 404) {
+      const j = await r.json().catch(() => ({}));
+      setPeerStatus('操作失败：' + (j.error || r.status));
+    }
+  } catch (e) {
+    setPeerStatus('操作失败：' + e);
+  }
+  refreshPending();
 }
 
 // ---- SSE 实时刷新（任一设备完成上传 / 删除 / 改名，所有页面同步列表） ----
@@ -574,6 +772,10 @@ function listenEvents() {
         } else if (j.type === 'notes') {
           clearTimeout(notesRefreshTimer);
           notesRefreshTimer = setTimeout(loadNotes, 200);
+        } else if (j.type === 'peers') {
+          loadPeers();
+        } else if (j.type === 'peer_request') {
+          refreshPending();
         }
       } catch (_) {}
     };
@@ -611,10 +813,10 @@ async function loadPartials() {
 }
 
 async function purgePartials(name) {
-  const t = token ? 't=' + encodeURIComponent(token) : '';
+  const p = authPair();
   let qs = '/api/uploads';
-  if (name) qs += '?name=' + encodeURIComponent(name) + (t ? '&' + t : '');
-  else if (t) qs += '?' + t;
+  if (name) qs += '?name=' + encodeURIComponent(name) + (p ? '&' + p : '');
+  else if (p) qs += '?' + p;
   try {
     const r = await fetch(qs, { method: 'DELETE' });
     const j = await r.json().catch(() => ({}));
@@ -658,7 +860,7 @@ $('saveDir').addEventListener('click', async () => {
   const d = dirInput.value.trim();
   if (!d) { alert('请先填写目录路径'); return; }
   try {
-    const r = await fetch('/api/settings', {
+    const r = await fetch('/api/settings?' + authPair(), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: d })
     });
     const j = await r.json().catch(() => ({}));
@@ -670,14 +872,14 @@ $('saveDir').addEventListener('click', async () => {
 
 $('pickFolder').addEventListener('click', async () => {
   try {
-    const r = await fetch('/api/pick-folder', { method: 'POST' });
+    const r = await fetch('/api/pick-folder?' + authPair(), { method: 'POST' });
     const j = await r.json().catch(() => ({}));
     if (j.path) dirInput.value = j.path;
     else if (j.error) alert('打开文件夹选择器失败：' + j.error);
   } catch (e) { alert('无法打开选择器：' + e); }
 });
 
-$('openFolder').addEventListener('click', () => { fetch('/api/open-folder', { method: 'POST' }); });
+$('openFolder').addEventListener('click', () => { fetch('/api/open-folder?' + authPair(), { method: 'POST' }); });
 
 prefixInput.value = getPrefix();
 prefixInput.addEventListener('input', () => {
@@ -691,3 +893,16 @@ loadPartials();
 loadSettings();
 loadNotes();
 listenEvents();
+
+if (peerListEl) {
+  loadPeers();
+  setInterval(loadPeers, 5000);
+  if (peerAddBtn) peerAddBtn.addEventListener('click', addPeerManually);
+  if (peerAddrEl) peerAddrEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addPeerManually(); }
+  });
+}
+if (askList) {
+  refreshPending();
+  setInterval(refreshPending, 4000);
+}
