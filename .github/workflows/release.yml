@@ -77,8 +77,17 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="${{ steps.ndk.outputs.ndk-path }}"
           gomobile init
-          gomobile bind -target=android -androidapi 26 \
-            -o android/app/libs/filedrop.aar ./mobile
+          mkdir -p android/app/libs
+          if ! gomobile bind -target=android -androidapi 26 \
+              -o android/app/libs/filedrop.aar ./mobile 2>&1 | tee bind.log; then
+            {
+              echo "### gomobile bind 失败日志"
+              echo '```'
+              tail -c 20000 bind.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Build APK (signed)
         uses: gradle/actions/setup-gradle@v4
