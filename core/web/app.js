@@ -85,92 +85,250 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// ---- 分块上传（v0.2：位图断点续传 + 并发分块 + complete 收尾） ----
+// ---- 分块上传：任务队列（一行一个文件，可单独取消 / 原地续传） ----
+// v0.2：位图断点续传 + 并发分块 + complete 收尾
+// v0.4：队列化。此前每选一次文件就新起一条 Promise 链，两条链同时写同一个进度条
+//       和状态行，数字会来回跳；而且 4GB 的传输一旦开始就停不下来。
 const isLocal = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+const CONC = 3; // 单文件内的分块并发度：3 路大致能压满 5GHz WiFi，再高手机侧反而堵
 
-// uploadFile 上传单个文件；出错时抛出，由队列层汇总。
-// opts.label 是多文件时加的前缀（如 [2/5]）；opts.onProgress(chunksDone, chunksTotal) 汇报进度。
-async function uploadFile(file, opts) {
-  opts = opts || {};
-  const label = opts.label || '';
-  const onProgress = opts.onProgress || function (done, total) {
-    upBar.style.width = ((done / total) * 100).toFixed(1) + '%';
+const queueEl = $('upQueue'), summaryEl = $('upSummary');
+const cancelAllBtn = $('cancelAll'), clearDoneBtn = $('clearDone');
+
+let tasks = [], taskIdSeq = 0, runner = null;
+
+const isAbort = (e) => !!e && (e.name === 'AbortError' || e.code === 20);
+
+// 取样指纹：头 / 中 / 尾各 64KiB 加上 8 字节小端 size，双 lane FNV-1a。
+// 服务端拿它判断「本机已经存有同一份内容」，算法必须与 core/upload.go 逐字节一致。
+// 明面上只用名字 + 大小判重是不够的：改了内容再导出一份常常同名同大小，
+// 判成重复就等于把用户刚发的文件悄悄丢掉。这里是 http 源，crypto.subtle 用不了，
+// 而判重也不需要加密强度。
+const SAMPLE = 64 * 1024;
+
+function fnv1a(h, b) {
+  for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 0x01000193); }
+  return h >>> 0;
+}
+
+async function fingerprint(file) {
+  const size = file.size;
+  let half = Math.floor(size / 2);
+  if (half > SAMPLE / 2) half -= Math.floor(SAMPLE / 2);
+  const tail = Math.max(0, size - SAMPLE);
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  const mix = (b) => { h1 = fnv1a(h1, b); h2 = fnv1a(h2 ^ b.length, b); };
+  const sz = new Uint8Array(8);
+  for (let i = 0; i < 8; i++) sz[i] = Math.floor(size / Math.pow(2, 8 * i)) & 0xff;
+  mix(sz);
+  for (const off of [0, half, tail]) {
+    const n = Math.min(SAMPLE, size - off);
+    const b = new Uint8Array(await file.slice(off, off + n).arrayBuffer());
+    if (b.length < n) { const p = new Uint8Array(n); p.set(b); mix(p); } else { mix(b); } // 与服务端 ReadAt 短读补零一致
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+
+function makeTask(file) {
+  const t = {
+    id: ++taskIdSeq, file, name: file.name, size: file.size,
+    total: Math.max(1, Math.ceil(file.size / CHUNK)),
+    sent: 0, bytes: 0, bytesAt: 0, tAt: 0, speed: 0,
+    status: 'queued', aborted: false, controller: null, err: '', finalName: '', reused: false,
   };
-  const say = (t) => setStatus(label + t);
+  const row = document.createElement('div');
+  row.className = 'qrow queued';
 
+  const head = document.createElement('div'); head.className = 'qhead';
+  const nm = document.createElement('span'); nm.className = 'qname';
+  nm.textContent = file.name;                     // textContent：文件名里的 <>"& 不会被解析成标签
+  const sz = document.createElement('span'); sz.className = 'qsize';
+  sz.textContent = fmtSize(file.size);
+  head.append(nm, sz);
+
+  const bar = document.createElement('div'); bar.className = 'qbar';
+  const fill = document.createElement('span'); bar.append(fill);
+
+  const stat = document.createElement('div'); stat.className = 'qstat';
+  const text = document.createElement('span');
+  const spacer = document.createElement('span'); spacer.className = 'spacer';
+  const act = document.createElement('button'); act.className = 'qact danger';
+  stat.append(text, spacer, act);
+
+  row.append(head, bar, stat);
+  Object.assign(t, { row, fill, text, act });
+  act.addEventListener('click', () => {
+    if (t.status === 'running') cancelTask(t);
+    else if (t.status === 'failed' || t.status === 'cancelled') retryTask(t);
+    else removeTask(t);
+  });
+  return t;
+}
+
+function renderTask(t) {
+  t.row.className = 'qrow ' + t.status + (t.status === 'running' ? ' active' : '');
+  t.fill.style.width = Math.min(100, (t.sent / t.total) * 100).toFixed(1) + '%';
+  t.act.textContent = { running: '取消', queued: '移除', failed: '续传', cancelled: '续传', done: '移除' }[t.status] || '移除';
+  t.act.classList.toggle('danger', t.status === 'running' || t.status === 'queued');
+  if (t.status === 'running') {
+    const pct = ((t.sent / t.total) * 100).toFixed(0);
+    const left = Math.max(0, t.total - t.sent) * CHUNK;
+    t.text.textContent = t.sent === 0 && t.speed === 0
+      ? '准备中…'
+      : pct + '% · ' + fmtSpeed(t.speed) + ' · 剩 ' + fmtTime(left / (t.speed || 1)) +
+        ' · ' + t.sent + '/' + t.total + ' 块';
+  } else if (t.status === 'queued') t.text.textContent = '排队中';
+  else if (t.status === 'done') {
+    // 跳过与改名可能同时发生：服务端既复用了旧文件，又把非法字符清洗成了另一个名字
+    const renamed = t.finalName && t.finalName !== t.name ? ' · 已存为 ' + t.finalName : '';
+    t.text.textContent = '完成 ✓' + (t.reused ? '（本机已有相同内容，未重复保存）' : '') + renamed;
+  } else if (t.status === 'failed') t.text.textContent = '失败：' + t.err;
+  else if (t.status === 'cancelled') t.text.textContent = '已取消（' + t.sent + '/' + t.total + ' 块已在电脑端，可续传）';
+}
+
+function renderTotals() {
+  const totalChunks = tasks.reduce((n, t) => n + t.total, 0) || 1;
+  const doneChunks = tasks.reduce((n, t) => n + Math.min(t.sent, t.total), 0);
+  upBar.style.width = ((doneChunks / totalChunks) * 100).toFixed(1) + '%';
+
+  const active = tasks.filter((t) => t.status === 'running' || t.status === 'queued').length;
+  const done = tasks.filter((t) => t.status === 'done').length;
+  const bad = tasks.filter((t) => t.status === 'failed' || t.status === 'cancelled').length;
+  const speed = tasks.reduce((n, t) => n + (t.speed || 0), 0);
+  const leftBytes = tasks.reduce((n, t) => n + Math.max(0, t.total - t.sent) * CHUNK, 0);
+  const bits = [];
+  if (tasks.length) bits.push(done + '/' + tasks.length + ' 个');
+  if (active) bits.push(fmtSpeed(speed) + ' · 剩 ' + fmtTime(leftBytes / (speed || 1)));
+  if (bad) bits.push(bad + ' 个未完成');
+  summaryEl.textContent = bits.join(' · ');
+  cancelAllBtn.style.display = active ? '' : 'none';
+  clearDoneBtn.style.display = tasks.some((t) => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled') ? '' : 'none';
+}
+
+function sampleSpeed(t) {
+  const now = performance.now(), dt = (now - t.tAt) / 1000;
+  if (dt >= 0.7) {
+    t.speed = (t.bytes - t.bytesAt) / dt;
+    t.tAt = now; t.bytesAt = t.bytes;
+  }
+}
+
+function cancelTask(t) {
+  t.aborted = true;
+  if (t.controller) t.controller.abort(); // 掐断在途分块；服务端保留已收块，之后可续传
+  renderTask(t); renderTotals();
+}
+
+function removeTask(t) {
+  if (t.status === 'running') cancelTask(t);
+  t.row.remove();
+  tasks = tasks.filter((x) => x !== t);
+  renderTotals();
+}
+
+function retryTask(t) {
+  t.status = 'queued'; t.err = ''; t.aborted = false;
+  renderTask(t); renderTotals();
+  runQueue();
+}
+
+function enqueueFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
   if (!token && !isLocal) {
-    throw new Error('当前页面没有上传令牌：请用电脑上显示的「带令牌地址」打开本页后再上传。');
+    setStatus('当前页面没有上传令牌：请用电脑上显示的「带令牌地址」打开本页后再上传。');
+    return;
   }
-  const name = file.name, size = file.size;
-  if (size === 0) { say('空文件，已跳过'); return { skipped: true }; }
-  const total = Math.ceil(size / CHUNK);
+  const empties = files.filter((f) => f.size === 0).map((f) => f.name);
+  files.filter((f) => f.size > 0).forEach((f) => {
+    const t = makeTask(f);
+    tasks.push(t);
+    queueEl.appendChild(t.row);
+    renderTask(t);
+  });
+  if (empties.length) setStatus('已跳过空文件：' + empties.join('、'));
+  renderTotals();
+  runQueue();
+}
 
-  // 1) 查询缺块
-  let st = { missing: [], complete: false, total: total };
-  try {
-    const r = await fetch('/api/upload/status?name=' + encodeURIComponent(name) + '&size=' + size);
-    if (r.ok) st = await r.json();
-  } catch (_) {}
-  if (st.complete) {
-    onProgress(total, total);
-    say(name + ' 已传输完成，跳过');
-    loadFiles();
-    return { skipped: true };
-  }
-  const missing = st.missing || [];
-  const haveChunks = total - missing.length;
-  onProgress(haveChunks, total);
-  say('准备上传：' + name + '（' + fmtSize(size) + '）' +
-    (haveChunks > 0 ? '，已有 ' + haveChunks + '/' + total + ' 块，续传 ' + missing.length + ' 块' : ''));
+async function runTask(t) {
+  t.status = 'running';
+  t.controller = new AbortController();
+  t.tAt = performance.now(); t.bytesAt = 0; t.speed = 0;
+  renderTask(t); renderTotals();
 
-  // 2) 并发补缺块（3 路并行，充分利用 WiFi 吞吐）
-  const CONC = 3;
-  const queue = missing.slice();
-  let done = 0, firstErr = null;
-  let lastT = performance.now(), lastChunks = haveChunks;
-
-  async function sendChunk(i) {
+  const { name, size } = t;
+  const signal = t.controller.signal;
+  const chunkURL = (i) => '/api/upload/chunk?t=' + encodeURIComponent(token) +
+    '&name=' + encodeURIComponent(name) + '&index=' + i + '&size=' + size;
+  const sendChunk = async (i) => {
     const begin = i * CHUNK, end = Math.min(begin + CHUNK, size);
-    const blob = file.slice(begin, end);
-    const url = '/api/upload/chunk?t=' + encodeURIComponent(token) +
-      '&name=' + encodeURIComponent(name) + '&index=' + i + '&size=' + size;
-    const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: blob });
-    if (!resp.ok) throw new Error('分块 ' + i + ' 失败（HTTP ' + resp.status + '）');
-  }
+    const r = await fetch(chunkURL(i), {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
+      body: t.file.slice(begin, end), signal,
+    });
+    if (!r.ok) throw new Error('分块 ' + i + ' 失败（HTTP ' + r.status + '）');
+    t.sent++; t.bytes += end - begin;
+  };
 
-  await Promise.all(Array.from({ length: Math.min(CONC, queue.length) || 1 }, async () => {
-    while (queue.length && !firstErr) {
-      const i = queue.shift();
-      try {
-        await sendChunk(i);
-      } catch (e) { firstErr = firstErr || e; break; }
-      done++;
-      const chunks = haveChunks + done, pct = (chunks / total) * 100;
-      onProgress(chunks, total);
-      const now = performance.now(), dt = (now - lastT) / 1000;
-      if (dt >= 0.3) {
-        const bytes = chunks * CHUNK, speed = (bytes - lastChunks * CHUNK) / dt;
-        say('传输中 ' + pct.toFixed(0) + '% · ' + fmtSpeed(speed) + ' · 剩余 ' + fmtTime((total - chunks) * CHUNK / (speed || 1)));
-        lastT = now; lastChunks = chunks;
-      }
+  // 1) 查缺块。查询失败就直接判失败：默默按「全新上传」重发几个 GB 才是更大的浪费，
+  //    手机端此时多半已经掉线，续传按钮才是用户要的。
+  let st;
+  let fp = '';
+  try { fp = await fingerprint(t.file); } catch (e) { fp = ''; }
+  for (let i = 0; ; i++) {
+    try {
+      const r = await fetch('/api/upload/status?name=' + encodeURIComponent(name) + '&size=' + size +
+        (fp ? '&fp=' + fp : ''), { signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      st = await r.json();
+      break;
+    } catch (e) {
+      if (isAbort(e) || t.aborted) throw e;
+      if (i >= 2) throw new Error('连不上服务（' + e + '），可点「续传」重试');
+      await new Promise((res) => setTimeout(res, 400 * (i + 1)));
     }
-  }));
+  }
+  t.total = st.total || t.total;
+  if (st.complete) {
+    t.sent = t.total; t.status = 'done'; t.reused = true; t.finalName = st.name || name;
+    renderTask(t); renderTotals();
+    return;
+  }
+  const missing = (st.missing || []).slice();
+  t.sent = Math.max(0, t.total - missing.length);
+  renderTask(t);
+
+  // 2) 并发补缺块
+  let firstErr = null;
+  async function worker() {
+    while (missing.length && !t.aborted && !firstErr) {
+      try {
+        await sendChunk(missing.shift());
+      } catch (e) { if (!firstErr) firstErr = e; break; }
+      sampleSpeed(t);
+      renderTask(t); renderTotals();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONC, missing.length) }, worker));
+  if (t.aborted) { t.status = 'cancelled'; t.speed = 0; renderTask(t); renderTotals(); return; }
   if (firstErr) throw firstErr;
 
-  // 3) complete 收尾（服务端校验位图、算 SHA-256、落盘改名）
+  // 3) 收尾；服务端可能回 missing 让补传
   for (let attempt = 0; attempt < 3; attempt++) {
     const r = await fetch('/api/upload/complete?t=' + encodeURIComponent(token) +
-      '&name=' + encodeURIComponent(name) + '&size=' + size, { method: 'POST' });
+      '&name=' + encodeURIComponent(name) + '&size=' + size, { method: 'POST', signal });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
-      const sha = j.sha256 || '';
-      onProgress(total, total);
-      say(name + ' 完成 ✓  SHA-256: ' + (sha ? sha.slice(0, 16) + '…' : '已保存'));
-      loadFiles();
-      return { sha256: j.sha256 };
+      t.sha256 = j.sha256 || '';
+      t.finalName = j.name || name;
+      t.reused = !!j.reused;
+      t.sent = t.total; t.status = 'done'; t.speed = 0;
+      renderTask(t); renderTotals();
+      return;
     }
     if (Array.isArray(j.missing) && j.missing.length) {
-      say('补传缺失的 ' + j.missing.length + ' 块…');
+      t.text.textContent = '补传缺失的 ' + j.missing.length + ' 块…';
       await Promise.all(j.missing.map(sendChunk));
       continue;
     }
@@ -179,62 +337,59 @@ async function uploadFile(file, opts) {
   throw new Error('收尾重试次数用尽');
 }
 
-// uploadFiles 串行上传一批文件，进度条按「总字节数」汇总，出错的跳过并计入汇总。
-async function uploadFiles(fileList) {
-  let files = Array.from(fileList || []);
-  if (!files.length) return;
-
-  const empty = files.filter((f) => f.size === 0).map((f) => f.name);
-  files = files.filter((f) => f.size > 0);
-  if (!files.length) { setStatus('所选文件都是空文件，已跳过' + (empty.length ? '：' + empty.join('、') : '')); return; }
-  if (!token && !isLocal) {
-    setStatus('当前页面没有上传令牌：请用电脑上显示的「带令牌地址」打开本页后再上传。');
-    return;
-  }
-
-  const totalChunks = files.reduce((n, f) => n + Math.ceil(f.size / CHUNK), 0);
-  let doneChunks = 0;
-  const results = [];
-
-  for (let k = 0; k < files.length; k++) {
-    const f = files[k];
-    const label = files.length > 1 ? '[' + (k + 1) + '/' + files.length + '] ' : '';
-    const base = Math.ceil(f.size / CHUNK);
+// 全局只有一个 runner：排队中的文件由它按序取走，新加入的文件自然排在队尾。
+function runQueue() {
+  if (runner) return;
+  runner = Promise.resolve().then(async () => {
     try {
-      await uploadFile(f, {
-        label: label,
-        onProgress: (d, t) => {
-          const pct = ((doneChunks + d) / totalChunks) * 100;
-          upBar.style.width = pct.toFixed(1) + '%';
+      while (true) {
+        const t = tasks.find((x) => x.status === 'queued');
+        if (!t) break;
+        try {
+          await runTask(t);
+        } catch (e) {
+          if (t.aborted || isAbort(e)) t.status = 'cancelled';
+          else { t.status = 'failed'; t.err = String(e && e.message ? e.message : e); }
+          t.speed = 0;
+          renderTask(t);
         }
-      });
-      results.push({ name: f.name, ok: true });
-    } catch (e) {
-      results.push({ name: f.name, ok: false, err: String(e) });
+        loadFiles();
+        loadPartials();   // 取消 / 失败都会改变「中断的传输」
+      }
+    } finally {
+      runner = null;
+      renderTotals();
     }
-    doneChunks += base;
-  }
+  });
+}
 
-  const bad = results.filter((r) => !r.ok);
-  const ok = results.length - bad.length;
-  upBar.style.width = '100%';
-  if (bad.length) {
-    setStatus('完成 ' + ok + '/' + results.length + '，失败 ' + bad.length + ' 个：' +
-      bad.map((b) => b.name).join('、') + '（可重新选择失败的文件续传）');
-  } else {
-    setStatus('全部完成 ✓ 共 ' + ok + ' 个文件' + (empty.length ? '（跳过空文件：' + empty.join('、') + '）' : ''));
-  }
-  loadFiles();
+if (cancelAllBtn) {
+  cancelAllBtn.addEventListener('click', () => {
+    tasks.filter((t) => t.status === 'running' || t.status === 'queued').forEach(cancelTask);
+    setStatus('已取消全部上传');
+  });
+}
+if (clearDoneBtn) {
+  clearDoneBtn.addEventListener('click', () => {
+    tasks.filter((t) => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled')
+      .forEach((t) => t.row.remove());
+    tasks = tasks.filter((t) => t.status === 'running' || t.status === 'queued');
+    renderTotals();
+  });
 }
 
 // ---- 交互绑定 ----
 drop.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => { uploadFiles(fileInput.files); fileInput.value = ''; });
+fileInput.addEventListener('change', () => { enqueueFiles(fileInput.files); fileInput.value = ''; });
 ['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', (e) => {
-  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) enqueueFiles(e.dataTransfer.files);
 });
+// 没拖中虚线框时，浏览器会把整个页面替换成该文件；在 window 上兜底阻止
+['dragover', 'drop'].forEach((ev) => window.addEventListener(ev, (e) => {
+  if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault();
+}));
 
 // ---- 删除 / 重命名（事件委托） ----
 fileListEl.addEventListener('click', async (e) => {

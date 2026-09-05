@@ -61,6 +61,22 @@
   a.dl { color: var(--brand); text-decoration: none; font-weight: 500; }
   a.dl:hover { text-decoration: underline; }
   .empty { color: var(--muted); padding: 12px 4px; }
+  /* 上传任务队列：一行一个文件，各自独立进度与取消 */
+  .queue { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .qrow { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .qrow.active { border-color: #cddffd; background: #fbfcff; }
+  .qrow.cancelled, .qrow.queued { opacity: .72; }
+  .qhead { display: flex; align-items: baseline; gap: 8px; }
+  .qname { flex: 1 1 auto; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qsize { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .qbar { height: 6px; background: #eef1f4; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .qbar > span { display: block; height: 100%; width: 0%; background: var(--brand); transition: width .2s; }
+  .qrow.done .qbar > span { background: var(--ok); }
+  .qrow.err .qbar > span { background: var(--err); }
+  .qstat { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .qstat > .spacer { flex: 1 1 auto; }
+  .qact { border: none; background: none; padding: 0; font-size: 12px; color: var(--brand); cursor: pointer; }
+  .qact.danger { color: var(--err); }
 </style>
 </head>
 <body>
@@ -107,8 +123,15 @@
       <h2>发送（上传到本机）</h2>
       <div id="drop" class="drop">点击选择文件（可多选），或把文件拖到这里<br/><span class="hint">支持 4GB+ · 自动分块 · 断点续传</span></div>
       <input id="file" type="file" multiple hidden />
-      <div id="upStatus" class="meta"></div>
       <div class="progress"><span id="upBar"></span></div>
+      <div id="upSummary" class="meta"></div>
+      <div id="upQueue" class="queue"></div>
+      <div class="row" style="margin-top:10px;">
+        <button id="cancelAll" style="display:none">全部取消</button>
+        <button id="clearDone" style="display:none">清除已完成</button>
+      </div>
+      <div id="upStatus" class="meta"></div>
+      <div class="hint">多个文件按顺序传，随时可单独取消；取消或中断留下的半截数据不占地方也看不见，请在下方「中断的传输」清理。重新选择同一个文件会自动续传。</div>
     </section>
 
     <section class="card" style="flex:1 1 360px;">
