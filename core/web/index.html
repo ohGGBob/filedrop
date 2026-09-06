@@ -121,6 +121,11 @@
   .drawer-mask.show{display:block}
   .drawer{position:fixed;top:0;right:0;z-index:281;width:min(380px,92vw);height:100%;background:var(--card);border-left:1px solid var(--border);box-shadow:-12px 0 32px rgba(0,0,0,.18);transform:translateX(100%);transition:.28s;padding:18px;overflow:auto}
   .drawer.show{transform:none}
+  #pullIndicator{position:fixed;top:60px;left:50%;transform:translateX(-50%) translateY(-20px);z-index:25;background:var(--card);border:1px solid var(--border);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--muted);box-shadow:var(--shadow);opacity:0;transition:.22s;pointer-events:none}
+  #pullIndicator.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .bottom-bar{position:fixed;left:0;right:0;bottom:0;z-index:24;background:color-mix(in srgb,var(--card) 92%, transparent);backdrop-filter:blur(14px);border-top:1px solid var(--border);display:none;gap:8px;padding:8px 10px;justify-content:space-around}
+  .bottom-bar button{flex:1;border-radius:999px}
+  @media(max-width:720px){ .bottom-bar{display:flex} main{padding-bottom:72px} }
   footer{max-width:1080px;margin:10px auto 0;padding:18px 16px;color:var(--muted);font-size:12px;display:flex;gap:10px;flex-wrap:wrap;justify-content:space-between;border-top:1px dashed var(--border)}
   @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
@@ -220,6 +225,8 @@
     <div class="hint">未传完的 .part 可能占数 GB，已完成文件不受影响。</div>
   </section>
 
+  <div id="pullIndicator">↓ 下拉刷新</div>
+  <nav id="bottomBar" class="bottom-bar"><button id="bottomUpload">⬆️ 上传</button><button id="bottomRefresh">↻ 刷新</button><button id="bottomHelp">？ 帮助</button></nav>
   <footer><span>FileDrop · 局域网文件快传 · 精致便携版</span><span>Windows · macOS · iOS · Android · HarmonyOS</span><span id="footVer">—</span></footer>
 </main>
 <div id="drawerMask" class="drawer-mask"></div>

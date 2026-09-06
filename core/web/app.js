@@ -1279,6 +1279,25 @@ async function checkUpdate(){
   }catch(_){}
 }
 setTimeout(checkUpdate, 1800);
+// 底部操作栏（移动端）
+$('bottomUpload')?.addEventListener('click',()=>$('drop')?.click());
+$('bottomRefresh')?.addEventListener('click',()=>{ loadFiles(); toast('已刷新','ok'); });
+$('bottomHelp')?.addEventListener('click', showHelp);
+// 下拉刷新（移动端）
+(function initPull(){
+  let startY=0, pulling=false;
+  const ind=$('pullIndicator');
+  window.addEventListener('touchstart', e=>{ if(window.scrollY===0) startY=e.touches[0].clientY; }, {passive:true});
+  window.addEventListener('touchmove', e=>{
+    if(window.scrollY!==0 || !startY) return;
+    const dy=e.touches[0].clientY-startY;
+    if(dy>60){ pulling=true; ind?.classList.add('show'); if(ind) ind.textContent='↻ 松手刷新'; }
+  }, {passive:true});
+  window.addEventListener('touchend', async()=>{
+    if(pulling){ ind?.classList.remove('show'); pulling=false; startY=0; await loadFiles(); toast('已刷新','ok'); }
+    else { startY=0; }
+  });
+})();
 // PWA Service Worker 注册（离线缓存静态资源，API 网络优先）
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
