@@ -327,6 +327,14 @@ if (zipSelBtn) {
     a.remove();
   });
 }
+const SPEED_KEY='fd_speed';
+async function throttleBytes(n){
+  const lim=parseInt(localStorage.getItem(SPEED_KEY)||'0',10);
+  if(lim>0){
+    const ms=(n/lim)*1000;
+    if(ms>15) await new Promise(r=>setTimeout(r, ms));
+  }
+}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -544,12 +552,14 @@ async function runTask(t) {
     '&name=' + encodeURIComponent(name) + '&index=' + i + '&size=' + size;
   const sendChunk = async (i) => {
     const begin = i * CHUNK, end = Math.min(begin + CHUNK, size);
+    const chunkLen=end-begin;
+    await throttleBytes(chunkLen);
     const r = await fetch(chunkURL(i), {
       method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
       body: t.file.slice(begin, end), signal,
     });
     if (!r.ok) throw new Error('分块 ' + i + ' 失败（HTTP ' + r.status + '）');
-    t.sent++; t.bytes += end - begin;
+    t.sent++; t.bytes += chunkLen;
   };
 
   // 1) 查缺块。查询失败就直接判失败：默默按「全新上传」重发几个 GB 才是更大的浪费，
@@ -1265,6 +1275,7 @@ $('clearActivity')?.addEventListener('click',()=>{ localStorage.removeItem(ACT_K
   $('drawerLang')?.addEventListener('click',()=> $('langToggle')?.click());
   $('drawerClearCache')?.addEventListener('click',()=>{ localStorage.removeItem(PREFIX_KEY); localStorage.removeItem(ACT_KEY); toast('已清除本地缓存','ok'); });
   $('drawerClearTrash')?.addEventListener('click',()=> $('trashEmpty')?.click());
+  const sp=$('speedLimit'); if(sp){ sp.value=localStorage.getItem(SPEED_KEY)||'0'; sp.addEventListener('change',()=>{ localStorage.setItem(SPEED_KEY, sp.value); toast(sp.value==='0'?'已取消限速':'限速 '+fmtSize(parseInt(sp.value,10))+'/s','info'); }); }
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && drawer.classList.contains('show')) shut(); });
 })();
 

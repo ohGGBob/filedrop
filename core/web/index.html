@@ -244,7 +244,8 @@
   <div style="margin-top:14px;display:flex;flex-direction:column;gap:12px">
     <div style="display:flex;justify-content:space-between;align-items:center"><span>主题</span><button id="drawerTheme">切换主题</button></div>
     <div style="display:flex;justify-content:space-between;align-items:center"><span>语言 / Language</span><button id="drawerLang">🌐 切换</button></div>
-    <div><div class="hint">端口与接收目录在上方卡片设置；限速 60/s 已内置，超限自动 429。</div><div class="hint" id="drawerInfo" style="margin-top:6px"></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center"><span>上传限速</span><select id="speedLimit"><option value="0">不限速</option><option value="5242880">5 MB/s</option><option value="10485760">10 MB/s</option><option value="20971520">20 MB/s</option><option value="52428800">50 MB/s</option></select></div>
+    <div><div class="hint">端口与接收目录在上方卡片设置；接口限速 60/s 已内置，超限自动 429。</div><div class="hint" id="drawerInfo" style="margin-top:6px"></div></div>
     <div class="row"><button id="drawerClearCache">清除本地缓存</button><button id="drawerClearTrash">清空回收站</button></div>
     <div class="hint">PWA 已启用，静态资源离线可用；更新检查每会话一次。</div>
   </div>
