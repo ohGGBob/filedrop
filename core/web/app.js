@@ -31,6 +31,32 @@ const THEME_KEY='fd_theme';
   if(btn){btn.addEventListener('click',()=>{const isDark=document.documentElement.getAttribute('data-theme')==='dark';const next=isDark?'light':'dark';if(next==='dark')document.documentElement.setAttribute('data-theme','dark');else document.documentElement.removeAttribute('data-theme');localStorage.setItem(THEME_KEY,next);toast(next==='dark'?'已切换深色':'已切换浅色','info')})}
 })();
 
+// i18n 中英双语
+const I18N={
+  zh:{langBtn:'🌐 EN', themeBtn:'🌓 主题', about:'关于', heroTitle:'1 秒连 · 随手传 · 不经云', heroDesc:'同一 WiFi 下，扫码即连。8MiB 分块·断点续传·SHA256 校验，4GB 大文件也稳。', send:'发送（上传到本机）', recv:'接收（从本机下载）', trash:'回收站', searchPH:'搜索文件名…', notePH:'验证码 / 命令 / 地址，粘贴即达', copied:'已复制', switchEN:'已切换 English', switchZH:'已切换中文'},
+  en:{langBtn:'🌐 中文', themeBtn:'🌓 Theme', about:'About', heroTitle:'Connect in 1s · Drop & Go · No Cloud', heroDesc:'Same WiFi, scan to connect. 8MiB chunks · resume · SHA256 verified, even 4GB stays solid.', send:'Send (Upload)', recv:'Receive (Download)', trash:'Trash', searchPH:'Search files…', notePH:'Paste code / command / URL', copied:'Copied', switchEN:'Switched to English', switchZH:'Switched to Chinese'}
+};
+const LANG_KEY='fd_lang';
+function curLang(){return localStorage.getItem(LANG_KEY) || (navigator.language.startsWith('zh')?'zh':'zh');}
+function t(k){const l=curLang(); return (I18N[l]&&I18N[l][k])||I18N.zh[k]||k;}
+function applyI18n(){
+  const l=curLang();
+  const lb=$('langToggle'); if(lb) lb.textContent=I18N[l].langBtn;
+  const tb=$('themeToggle'); if(tb) tb.textContent=I18N[l].themeBtn;
+  const ab=$('aboutBtn'); if(ab) ab.textContent=I18N[l].about;
+  const si=$('searchInput'); if(si) si.placeholder=I18N[l].searchPH;
+  const ni=$('noteInput'); if(ni) ni.placeholder=I18N[l].notePH;
+  document.documentElement.lang=l==='en'?'en':'zh-CN';
+}
+(function initLang(){
+  applyI18n();
+  $('langToggle')?.addEventListener('click',()=>{
+    const cur=curLang(); const next=cur==='zh'?'en':'zh';
+    localStorage.setItem(LANG_KEY,next); applyI18n(); renderFiles();
+    toast(next==='en'?I18N.en.switchEN:I18N.zh.switchZH,'info');
+  });
+})();
+
 // 下载文件名前缀（存在手机/浏览器本地，默认加 FileDrop_ 便于在下载目录里识别）
 function getPrefix() {
   const v = localStorage.getItem(PREFIX_KEY);
