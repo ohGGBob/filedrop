@@ -1,6 +1,6 @@
-//go:build windows
+//go:build windows || darwin
 
-// filedrop-tray —— Windows 系统托盘版（自包含：内嵌前端与服务端，不依赖外部文件）
+// filedrop-tray —— 系统托盘版（Windows / macOS，自包含：内嵌前端与服务端，不依赖外部文件）
 package main
 
 import (
@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -104,25 +105,40 @@ func onReady(srv *core.Server) {
 func onExit() {}
 
 func openBrowser(u string) {
+	if isDarwin() {
+		_ = exec.Command("open", u).Start()
+		return
+	}
 	cmd := exec.Command("cmd", "/c", "start", "", u)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Run()
 }
 
-// copyToClipboard 把文本放进 Windows 剪贴板（经 PowerShell Set-Clipboard，无尾随换行）。
+// copyToClipboard 跨平台剪贴板
 func copyToClipboard(s string) {
+	if isDarwin() {
+		cmd := exec.Command("sh", "-c", "printf %s \"$1\" | pbcopy", "sh", s)
+		_ = cmd.Run()
+		return
+	}
 	esc := strings.ReplaceAll(s, "'", "''")
 	cmd := exec.Command("powershell", "-NoProfile", "-Command", "Set-Clipboard -Value '"+esc+"'")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Run()
 }
 
-// openFolder 在资源管理器中打开目录。
+// openFolder 在系统文件管理器中打开目录。
 func openFolder(dir string) {
+	if isDarwin() {
+		_ = exec.Command("open", dir).Start()
+		return
+	}
 	cmd := exec.Command("explorer", dir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Start()
 }
+
+func isDarwin() bool { return runtime.GOOS == "darwin" }
 
 // makeIcon 生成品牌图标：圆角卡片 + 文档 + 向下箭头，辨识度远高于纯色方块
 func makeIcon() []byte {
