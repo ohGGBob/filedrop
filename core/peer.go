@@ -540,15 +540,14 @@ func (s *Server) beaconLoop(conn *net.UDPConn, done <-chan struct{}) {
 	}
 }
 
-// sendAll 发到全局广播地址、本机 /24 的定向广播地址，以及已知对端的单播地址。
-// 定向广播按 /24 估算是有意为之的粗糙：家里和小办公网几乎都是 /24，
-// 而单播那一路正好能补上跨网段 / 广播被 AP 吞掉的情况。
+// sendAll 发到全局广播、定向广播、组播及已知对端单播，多播互补提升穿透。
+// 组播 224.0.0.251 (mDNS) / 239.255.255.250 (SSDP) 在部分 AP 屏蔽广播但放行组播时仍可达。
 func (s *Server) sendAll(conn *net.UDPConn, b beacon) {
 	blob, err := json.Marshal(b)
 	if err != nil {
 		return
 	}
-	targets := []string{"255.255.255.255"}
+	targets := []string{"255.255.255.255", "224.0.0.251", "239.255.255.250"}
 	if ip := net.ParseIP(s.ip).To4(); ip != nil {
 		targets = append(targets, fmt.Sprintf("%d.%d.%d.255", ip[0], ip[1], ip[2]))
 	}
@@ -563,6 +562,15 @@ func (s *Server) sendAll(conn *net.UDPConn, b beacon) {
 			continue
 		}
 		seen[t] = true
+		// 组播/广播需设置 TTL，避免被路由器过度扩散（本地链路即可）
+		if t == "224.0.0.251" || t == "239.255.255.250" {
+			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			// 尝试以组播方式发出，失败则回退普通 WriteTo
+			if addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", t, discPort)); err == nil {
+				_, _ = conn.WriteToUDP(blob, addr)
+				continue
+			}
+		}
 		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		_, _ = conn.WriteToUDP(blob, &net.UDPAddr{IP: net.ParseIP(t), Port: discPort})
 	}
