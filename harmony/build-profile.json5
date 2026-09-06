@@ -1,0 +1,8 @@
+{
+  "app": {
+    "signingConfigs": [],
+    "products": [{ "name": "default", "signingConfig": "default" }],
+    "buildModeSet": [{ "name": "release", "debuggable": false }]
+  },
+  "modules": [{ "name": "entry", "srcPath": "./entry", "targets": [{ "name": "default", "applyToProducts": ["default"] }] }]
+}
