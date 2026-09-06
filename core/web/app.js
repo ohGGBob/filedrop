@@ -199,7 +199,32 @@ function refreshZipBtn() {
   updateSelCount();
 }
 
-let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curDupOnly=false, curFavOnly=false, curPage=1; const PAGE_SIZE=20;
+let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curDupOnly=false, curFavOnly=false, curFolder='', curPage=1; const PAGE_SIZE=20;
+function getSubfolders(){
+  const set=new Set();
+  const prefix=curFolder?curFolder+'/':'';
+  for(const f of allFiles){
+    if(!f.name.startsWith(prefix)) continue;
+    const rest=f.name.slice(prefix.length);
+    const idx=rest.indexOf('/');
+    if(idx>=0) set.add(rest.slice(0, idx));
+  }
+  return [...set].sort();
+}
+function renderBreadcrumb(){
+  const el=$('breadcrumb'); if(!el) return;
+  const parts=curFolder?curFolder.split('/'):[];
+  let html='<a href="#" data-bc="" style="text-decoration:none;color:var(--brand)">📁 全部</a>';
+  let acc='';
+  for(const p of parts){
+    acc=acc?acc+'/'+p:p;
+    html+=' <span style="color:var(--muted)">›</span> <a href="#" data-bc="'+escapeHtml(acc)+'" style="text-decoration:none;color:var(--brand)">'+escapeHtml(p)+'</a>';
+  }
+  if(curFolder) html+=' <button id="bcUp" style="margin-left:6px;font-size:11px">⬆️ 上一级</button>';
+  el.innerHTML=html;
+  el.querySelectorAll('a[data-bc]').forEach(a=>a.addEventListener('click', e=>{ e.preventDefault(); curFolder=a.dataset.bc; curPage=1; renderFiles(); }));
+  $('bcUp')?.addEventListener('click', ()=>{ curFolder=curFolder.split('/').slice(0,-1).join('/'); curPage=1; renderFiles(); });
+}
 const FAV_KEY='fd_fav';
 function getFavSet(){ try{ return new Set(JSON.parse(localStorage.getItem(FAV_KEY)||'[]')); }catch(_){ return new Set(); } }
 function isFav(name){ return getFavSet().has(name); }
@@ -231,6 +256,7 @@ function updateStats(){
   fetch('/api/trash').then(r=>r.json()).then(list=>{ $('statTrash') && ($('statTrash').textContent=String(list.length)); }).catch(()=>{});
 }
 function renderFiles(){
+  renderBreadcrumb();
   let list=[...allFiles];
   if(curSearch) {const k=curSearch.toLowerCase(); list=list.filter(f=>f.name.toLowerCase().includes(k));}
   if(curType) list=list.filter(f=>fileType(f.name)===curType);
@@ -238,6 +264,10 @@ function renderFiles(){
   const isDup=f=> f.sha256 && dupMap.get(f.sha256)>1;
   if(curDupOnly) list=list.filter(isDup);
   if(curFavOnly) list=list.filter(f=>isFav(f.name));
+  // 文件夹层级过滤
+  const folders=getSubfolders();
+  const prefix=curFolder?curFolder+'/':'';
+  list=list.filter(f=>{ if(!f.name.startsWith(prefix)) return false; const rest=f.name.slice(prefix.length); return rest.indexOf('/')===-1; });
   if(curSort==='name_asc') list.sort((a,b)=>a.name.localeCompare(b.name));
   else if(curSort==='size_desc') list.sort((a,b)=>b.size-a.size);
   else if(curSort==='size_asc') list.sort((a,b)=>a.size-b.size);
@@ -247,27 +277,37 @@ function renderFiles(){
   const slice=list.slice((curPage-1)*PAGE_SIZE, curPage*PAGE_SIZE);
   const cntEl=$('fileCount'); if(cntEl) cntEl.textContent=total?`共 ${total} 个 · 第 ${curPage}/${pages} 页`:'';
   const pager=$('filePager'); if(pager){pager.style.display=total>PAGE_SIZE?'':'none'; pager.textContent=''; for(let i=1;i<=pages;i++){const b=document.createElement('button');b.textContent=String(i);if(i===curPage)b.className='cur';b.addEventListener('click',()=>{curPage=i;renderFiles()});pager.appendChild(b);} }
-  if(!slice.length){ fileListEl.innerHTML='<div class="empty"><div class="illus">∅</div><div>'+(curSearch?'无匹配结果':'还没有文件 — 拖拽或点击上传')+'</div><div class="hint">支持图片/视频/文档预览，长按卡片可多选</div></div>'; if(zipSelBtn) zipSelBtn.style.display='none'; updateStats(); return; }
+  if(!slice.length && folders.length===0){ fileListEl.innerHTML='<div class="empty"><div class="illus">∅</div><div>'+(curSearch?'无匹配结果':'还没有文件 — 拖拽或点击上传')+'</div><div class="hint">支持图片/视频/文档预览，长按卡片可多选</div></div>'; if(zipSelBtn) zipSelBtn.style.display='none'; updateStats(); return; }
   const vm=$('viewMode')?.value || 'auto';
   const useCards = vm==='cards' || (vm==='auto' && (window.innerWidth<720 || isIOS));
   const prefix=getPrefix();
   if(useCards){
     let html='<div class="cards">';
+    for(const fd of folders){
+      const fp=curFolder?curFolder+'/'+fd:fd;
+      html+='<div class="fcard" data-folder="'+escapeHtml(fp)+'" style="cursor:pointer;border-style:dashed"><div class="top"><div class="fico">📁</div><div class="fname">'+escapeHtml(fd)+'</div></div><div class="fmeta">文件夹 · 点击进入</div></div>';
+    }
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
       const star=isFav(f.name)?'⭐':'☆';
-      html+='<div class="fcard'+(isDup(f)?' dup':'')+'"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+(isDup(f)?'<span class="dup-badge">重复</span>':'')+'</div><button data-act="fav" data-name="'+escapeHtml(f.name)+'" style="background:none;border:none;cursor:pointer;font-size:14px" title="收藏">'+star+'</button><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
+      const shortName=f.name.startsWith(prefix)?f.name.slice(prefix.length):f.name;
+      html+='<div class="fcard'+(isDup(f)?' dup':'')+'"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(shortName)+(isDup(f)?'<span class="dup-badge">重复</span>':'')+'</div><button data-act="fav" data-name="'+escapeHtml(f.name)+'" style="background:none;border:none;cursor:pointer;font-size:14px" title="收藏">'+star+'</button><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
     }
     html+='</div>'; fileListEl.innerHTML=html;
   } else {
     let html='<table><thead><tr><th></th><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
+    for(const fd of folders){
+      const fp=curFolder?curFolder+'/'+fd:fd;
+      html+='<tr data-folder="'+escapeHtml(fp)+'" style="cursor:pointer;background:color-mix(in srgb,var(--soft) 50%, transparent)"><td>📁</td><td colspan="2"><b>'+escapeHtml(fd)+'</b> <span class="hint">文件夹</span></td><td><a href="#" class="dl" data-folder="'+escapeHtml(fp)+'">进入</a></td></tr>';
+    }
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
       const star=isFav(f.name)?'⭐':'☆';
-      html+='<tr'+(isDup(f)?' style="background:color-mix(in srgb,var(--warn) 6%, transparent)"':'')+'><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><a href="#" data-act="fav" data-name="'+escapeHtml(f.name)+'" style="text-decoration:none;margin-right:4px">'+star+'</a><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isDup(f)?'<span class="dup-badge">重复</span>':'')+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+      html+='<tr'+(isDup(f)?' style="background:color-mix(in srgb,var(--warn) 6%, transparent)"':'')+'><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><a href="#" data-act="fav" data-name="'+escapeHtml(f.name)+'" style="text-decoration:none;margin-right:4px">'+star+'</a><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name.split('/').pop())+'</span>'+(isDup(f)?'<span class="dup-badge">重复</span>':'')+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
     }
     html+='</tbody></table>'; fileListEl.innerHTML=html;
   }
+  fileListEl.querySelectorAll('[data-folder]').forEach(el=> el.addEventListener('click', e=>{ e.preventDefault(); curFolder=el.getAttribute('data-folder')||''; curPage=1; renderFiles(); }));
   refreshZipBtn(); updateStats();
 }
 async function loadFiles() {
