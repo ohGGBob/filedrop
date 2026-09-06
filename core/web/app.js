@@ -200,6 +200,9 @@ function refreshZipBtn() {
 }
 
 let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curDupOnly=false, curFavOnly=false, curTag='', curFolder='', curPage=1; const PAGE_SIZE=20;
+const VIRT_KEY='fd_virtualFolders';
+function getVirtual(){ try{ return new Set(JSON.parse(localStorage.getItem(VIRT_KEY)||'[]')); }catch(_){ return new Set(); } }
+function addVirtual(path){ const s=getVirtual(); s.add(path); localStorage.setItem(VIRT_KEY, JSON.stringify([...s])); }
 function getSubfolders(){
   const set=new Set();
   const prefix=curFolder?curFolder+'/':'';
@@ -209,6 +212,16 @@ function getSubfolders(){
     const idx=rest.indexOf('/');
     if(idx>=0) set.add(rest.slice(0, idx));
   }
+  // 叠加空文件夹虚拟记录
+  for(const v of getVirtual()){
+    if(!v.startsWith(prefix)) continue;
+    const rest=v.slice(prefix.length);
+    if(!rest) continue;
+    const idx=rest.indexOf('/');
+    if(idx===-1 && rest) set.add(rest);
+    else if(idx>=0) set.add(rest.slice(0,idx));
+  }
+  // 清理已非空的虚拟（已有真实文件）
   return [...set].sort();
 }
 function renderBreadcrumb(){
@@ -224,6 +237,8 @@ function renderBreadcrumb(){
   el.innerHTML=html;
   el.querySelectorAll('a[data-bc]').forEach(a=>a.addEventListener('click', e=>{ e.preventDefault(); curFolder=a.dataset.bc; curPage=1; renderFiles(); }));
   $('bcUp')?.addEventListener('click', ()=>{ curFolder=curFolder.split('/').slice(0,-1).join('/'); curPage=1; renderFiles(); });
+  // 文件夹操作栏显隐
+  const ops=$('folderOps'); if(ops){ const inFolder=!!curFolder; $('renameFolderBtn').style.display=inFolder?'':'none'; $('deleteFolderBtn').style.display=inFolder?'':'none'; }
 }
 const FAV_KEY='fd_fav';
 function getFavSet(){ try{ return new Set(JSON.parse(localStorage.getItem(FAV_KEY)||'[]')); }catch(_){ return new Set(); } }
@@ -353,6 +368,43 @@ $('favFilter')?.addEventListener('click',()=>{
   curPage=1; renderFiles(); toast(curFavOnly?'仅显示收藏':'已显示全部','info');
 });
 $('tagFilter')?.addEventListener('change', e=>{ curTag=e.target.value; curPage=1; renderFiles(); });
+$('newFolderBtn')?.addEventListener('click', async()=>{
+  const name=await inputModal('新建文件夹','输入文件夹名','');
+  if(!name) return;
+  const clean=name.replace(/[\/\\]/g,'').trim();
+  if(!clean || clean==='.'||clean==='..'){ toast('名称无效','err'); return; }
+  const target=curFolder?curFolder+'/'+clean:clean;
+  addVirtual(target);
+  curFolder=target; curPage=1; renderFiles(); toast('已创建文件夹','ok');
+});
+$('renameFolderBtn')?.addEventListener('click', async()=>{
+  if(!curFolder){ toast('请先进入文件夹','warn'); return; }
+  const base=curFolder.split('/').pop();
+  const nn=await inputModal('重命名文件夹','输入新名称', base);
+  if(!nn || nn===base) return;
+  const clean=nn.replace(/[\/\\]/g,'').trim();
+  if(!clean){ toast('名称无效','err'); return; }
+  const parent=curFolder.split('/').slice(0,-1).join('/');
+  const newPath=parent?parent+'/'+clean:clean;
+  const prefix=curFolder+'/';
+  const toMove=allFiles.filter(f=>f.name.startsWith(prefix)||f.name===curFolder);
+  if(!toMove.length){ curFolder=newPath; renderFiles(); toast('已重命名空文件夹','ok'); return; }
+  if(!(await modalPrompt({title:'重命名文件夹', body:`将重命名 ${toMove.length} 个文件`, sub:`${curFolder} → ${newPath}`, okText:'重命名', danger:false}))) return;
+  let ok=0; for(const f of toMove){ const newName=newPath + f.name.slice(curFolder.length); const r=await fetch('/api/rename?'+authPair(), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:f.name, newName})}); if(r.ok) ok++; }
+  curFolder=newPath; loadFiles(); toast(`已重命名 ${ok}/${toMove.length}`,'ok');
+});
+$('deleteFolderBtn')?.addEventListener('click', async()=>{
+  if(!curFolder) return;
+  const old=curFolder;
+  const prefix=curFolder+'/';
+  const toDel=allFiles.filter(f=>f.name.startsWith(prefix));
+  const msg=toDel.length?`将删除文件夹 ${curFolder} 内的 ${toDel.length} 个文件`:`删除空文件夹 ${curFolder}`;
+  if(!(await modalPrompt({title:'删除文件夹', body:msg, sub:'文件将移入回收站', okText:'删除', danger:true}))) return;
+  let ok=0; for(const f of toDel){ const r=await fetch('/api/files?name='+encodeURIComponent(f.name)+'&'+authPair(), {method:'DELETE'}); if(r.ok) ok++; }
+  // 清理虚拟空文件夹记录
+  const vs=getVirtual(); if(vs.has(old)){ vs.delete(old); localStorage.setItem(VIRT_KEY, JSON.stringify([...vs])); }
+  curFolder=old.split('/').slice(0,-1).join('/'); loadFiles(); toast(toDel.length?`已删除 ${ok}/${toDel.length}`:'已删除空文件夹','ok');
+});
 (function initViewMode(){
   const sel=$('viewMode'); if(!sel) return;
   const saved=localStorage.getItem('fd_view');
