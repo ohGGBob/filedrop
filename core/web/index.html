@@ -188,6 +188,12 @@
     </section>
   </div>
 
+  <section class="card" id="activityCard">
+    <h2><span class="dot" style="background:var(--ok)"></span>活动时间线 <button id="clearActivity" style="margin-left:auto;font-size:12px">清空</button></h2>
+    <div id="activityList" style="display:flex;flex-direction:column;gap:8px;max-height:240px;overflow:auto"></div>
+    <div class="hint">本地记录最近 50 条上传/下载/删除/还原，刷新不丢。</div>
+  </section>
+
   <section class="card">
     <h2><span class="dot" style="background:var(--warn)"></span>传文字（剪贴板快传）</h2>
     <textarea id="noteInput" rows="3" placeholder="验证码 / 命令 / 地址，粘贴即达"></textarea>

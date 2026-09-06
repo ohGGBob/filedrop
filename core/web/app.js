@@ -234,14 +234,14 @@ function renderFiles(){
     let html='<div class="cards">';
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
-      html+='<div class="fcard"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+'</div><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
+      html+='<div class="fcard"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+'</div><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
     }
     html+='</div>'; fileListEl.innerHTML=html;
   } else {
     let html='<table><thead><tr><th></th><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
-      html+='<tr><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+      html+='<tr><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
     }
     html+='</tbody></table>'; fileListEl.innerHTML=html;
   }
@@ -265,7 +265,7 @@ $('selInvert')?.addEventListener('click',()=>{fileListEl.querySelectorAll('input
 $('bulkDel')?.addEventListener('click', async()=>{
   const names=selectedNames(); if(!names.length){toast('请先选择文件','warn');return;}
   if(!(await modalPrompt({title:'批量删除',body:`确定将 ${names.length} 个文件移入回收站？`,sub:'可在回收站还原',okText:'删除',danger:true}))) return;
-  let ok=0; for(const n of names){ const r=await fetch('/api/files?name='+encodeURIComponent(n)+'&'+authPair(),{method:'DELETE'}); if(r.ok) ok++; }
+  let ok=0; for(const n of names){ const r=await fetch('/api/files?name='+encodeURIComponent(n)+'&'+authPair(),{method:'DELETE'}); if(r.ok){ ok++; logActivity('del', n); } }
   toast(`已移入回收站 ${ok}/${names.length}`,'ok'); loadFiles();
 });
 (function initViewMode(){
@@ -287,7 +287,7 @@ if (zipSelBtn) {
   zipSelBtn.addEventListener('click', () => {
     const names = selectedNames();
     if (!names.length) return;
-    // 直接用 <a download> 让浏览器把 ZIP 存下来；服务端流式打包，不占磁盘
+    logActivity('zip', names.join(', '));
     const a = document.createElement('a');
     a.href = '/api/zip?names=' + encodeURIComponent(names.join(','));
     a.download = 'FileDrop_打包.zip';
@@ -298,6 +298,25 @@ if (zipSelBtn) {
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const ACT_KEY='fd_activity';
+function logActivity(type, name){
+  try{
+    const list=JSON.parse(localStorage.getItem(ACT_KEY)||'[]');
+    list.unshift({type, name, at:Date.now()});
+    localStorage.setItem(ACT_KEY, JSON.stringify(list.slice(0,50)));
+    renderActivity();
+  }catch(_){}
+}
+function renderActivity(){
+  const el=$('activityList'); if(!el) return;
+  let list=[]; try{ list=JSON.parse(localStorage.getItem(ACT_KEY)||'[]'); }catch(_){}
+  if(!list.length){ el.innerHTML='<div class="hint">暂无活动 — 上传或下载后在此查看</div>'; return; }
+  const iconMap={upload:'⬆️', download:'⬇️', del:'🗑️', rename:'✏️', restore:'↩️', zip:'🗜️'};
+  el.innerHTML=list.map(it=>{
+    const d=new Date(it.at); const ts=d.toLocaleString();
+    return `<div style="display:flex;gap:8px;align-items:center;border:1px solid var(--border);border-radius:10px;padding:7px 10px;background:var(--card)"><span>${iconMap[it.type]||'•'}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(it.name)}</span><span class="hint">${escapeHtml(it.type)} · ${ts}</span></div>`;
+  }).join('');
 }
 
 // ---- 分块上传：任务队列（一行一个文件，可单独取消 / 原地续传） ----
@@ -523,7 +542,7 @@ async function runTask(t) {
   t.total = st.total || t.total;
   if (st.complete) {
     t.sent = t.total; t.status = 'done'; t.reused = true; t.finalName = st.name || name;
-    renderTask(t); renderTotals();
+    renderTask(t); renderTotals(); logActivity('upload', t.finalName||name);
     return;
   }
   // 同名同大小的文件已在本机，但内容指纹对不上：问一次「覆盖还是共存」，
@@ -569,7 +588,7 @@ async function runTask(t) {
       t.finalName = j.name || name;
       t.reused = !!j.reused;
       t.sent = t.total; t.status = 'done'; t.speed = 0;
-      renderTask(t); renderTotals();
+      renderTask(t); renderTotals(); logActivity('upload', t.finalName||name);
       return;
     }
     if (Array.isArray(j.missing) && j.missing.length) {
@@ -659,14 +678,34 @@ fileListEl.addEventListener('change', (e) => {
 fileListEl.addEventListener('click', async (e) => {
   const a = e.target.closest('a[data-act]');
   if (!a) return;
-  e.preventDefault();
   const name = a.dataset.name;
   const p = authPair();
   const tqs = p ? '&' + p : '';
+  if (a.dataset.act === 'dl') {
+    logActivity('download', name);
+    if(isIOS){
+      e.preventDefault();
+      try{
+        const r=await fetch('/api/download?name='+encodeURIComponent(name));
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const blob=await r.blob();
+        const url=URL.createObjectURL(blob);
+        if(navigator.share && navigator.canShare && blob.size < 30*1024*1024){
+          const file=new File([blob], name, {type: blob.type});
+          if(navigator.canShare({files:[file]})) { await navigator.share({files:[file], title:name}); URL.revokeObjectURL(url); return; }
+        }
+        const a2=document.createElement('a'); a2.href=url; a2.download=name; document.body.appendChild(a2); a2.click(); a2.remove();
+        setTimeout(()=>URL.revokeObjectURL(url), 8000);
+      }catch(err){ toast('下载失败：'+err,'err'); }
+      return;
+    }
+    return; // 让浏览器原生处理下载（已记录活动）
+  }
+  e.preventDefault();
   if (a.dataset.act === 'del') {
     if (!(await modalPrompt({ title: '删除文件', body: '确定删除「' + name + '」？', sub: '将移入回收站，可在下方还原。', okText: '移入回收站', cancelText: '取消', danger: true }))) return;
     const r = await fetch('/api/files?name=' + encodeURIComponent(name) + tqs, { method: 'DELETE' });
-    if (r.ok) loadFiles();
+    if (r.ok) { logActivity('del', name); loadFiles(); }
     else { const j = await r.json().catch(() => ({})); toast('删除失败：' + (j.error || r.status), 'err'); }
   } else if (a.dataset.act === 'rename') {
     const nn = await inputModal('重命名', '输入新文件名', name);
@@ -676,24 +715,10 @@ fileListEl.addEventListener('click', async (e) => {
       body: JSON.stringify({ name: name, newName: nn })
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast('已重命名','ok'); loadFiles(); }
+    if (r.ok) { logActivity('rename', nn); toast('已重命名','ok'); loadFiles(); }
     else toast('重命名失败：' + (j.error || r.status), 'err');
   } else if (a.dataset.act === 'preview') {
     showPreview(name);
-  } else if (a.dataset.act === 'dl' && isIOS) {
-    // iOS 对 download 属性支持弱，改走 blob + share/open 兜底
-    try{
-      const r=await fetch('/api/download?name='+encodeURIComponent(name));
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      const blob=await r.blob();
-      const url=URL.createObjectURL(blob);
-      if(navigator.share && navigator.canShare && blob.size < 30*1024*1024){
-        const file=new File([blob], name, {type: blob.type});
-        if(navigator.canShare({files:[file]})) { await navigator.share({files:[file], title:name}); URL.revokeObjectURL(url); return; }
-      }
-      const a2=document.createElement('a'); a2.href=url; a2.download=name; document.body.appendChild(a2); a2.click(); a2.remove();
-      setTimeout(()=>URL.revokeObjectURL(url), 8000);
-    }catch(err){ toast('下载失败：'+err,'err'); }
   }
 });
 
@@ -726,7 +751,7 @@ $('trashEmpty')?.addEventListener('click', async()=>{
 $('trashList')?.addEventListener('click', async(e)=>{
   const a=e.target.closest('a[data-trash="restore"]'); if(!a) return; e.preventDefault();
   const tn=a.dataset.name; const r=await fetch('/api/trash/restore?name='+encodeURIComponent(tn)+'&'+authPair(),{method:'POST'});
-  const j=await r.json().catch(()=>({})); if(r.ok){ toast('已还原','ok'); loadTrash(); loadFiles(); } else toast('还原失败：'+(j.error||r.status),'err');
+  const j=await r.json().catch(()=>({})); if(r.ok){ logActivity('restore', j.restored||tn); toast('已还原','ok'); loadTrash(); loadFiles(); } else toast('还原失败：'+(j.error||r.status),'err');
 });
 // 删除后刷新回收站
 const _origDeleteFetch = window.fetch;
@@ -1195,6 +1220,8 @@ loadPartials();
 loadSettings();
 loadNotes();
 listenEvents();
+renderActivity();
+$('clearActivity')?.addEventListener('click',()=>{ localStorage.removeItem(ACT_KEY); renderActivity(); toast('已清空活动记录','ok'); });
 
 if (peerListEl) {
   loadPeers();
