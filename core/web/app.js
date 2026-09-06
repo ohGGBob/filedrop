@@ -199,7 +199,7 @@ function refreshZipBtn() {
   updateSelCount();
 }
 
-let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curPage=1; const PAGE_SIZE=20;
+let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curDupOnly=false, curPage=1; const PAGE_SIZE=20;
 function fileIcon(name){const ext=(name.split('.').pop()||'').toLowerCase();const map={jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',mp4:'🎬',mov:'🎬',avi:'🎬',mkv:'🎬',mp3:'🎵',wav:'🎵',pdf:'📄',zip:'🗜️',rar:'🗜️',docx:'📝',xlsx:'📊',pptx:'📊',txt:'📃'};return map[ext]||'📦'}
 function fileType(name){const ext=(name.split('.').pop()||'').toLowerCase(); if(['jpg','jpeg','png','gif','webp','heic','bmp','svg'].includes(ext)) return 'image'; if(['mp4','mov','avi','mkv','webm','m4v'].includes(ext)) return 'video'; if(['mp3','wav','aac','flac','ogg','m4a'].includes(ext)) return 'audio'; if(['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','md','csv','json','html'].includes(ext)) return 'doc'; if(['zip','rar','7z','tar','gz','bz2'].includes(ext)) return 'archive'; return 'other';}
 function isPreviewable(name){return /\.(jpg|jpeg|png|gif|webp|txt|md|log|json|csv|html|pdf|mp4|mp3)$/i.test(name)}
@@ -217,6 +217,9 @@ function renderFiles(){
   let list=[...allFiles];
   if(curSearch) {const k=curSearch.toLowerCase(); list=list.filter(f=>f.name.toLowerCase().includes(k));}
   if(curType) list=list.filter(f=>fileType(f.name)===curType);
+  const dupMap=new Map(); for(const f of allFiles){ if(f.sha256) dupMap.set(f.sha256,(dupMap.get(f.sha256)||0)+1); }
+  const isDup=f=> f.sha256 && dupMap.get(f.sha256)>1;
+  if(curDupOnly) list=list.filter(isDup);
   if(curSort==='name_asc') list.sort((a,b)=>a.name.localeCompare(b.name));
   else if(curSort==='size_desc') list.sort((a,b)=>b.size-a.size);
   else if(curSort==='size_asc') list.sort((a,b)=>a.size-b.size);
@@ -234,14 +237,14 @@ function renderFiles(){
     let html='<div class="cards">';
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
-      html+='<div class="fcard"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+'</div><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
+      html+='<div class="fcard'+(isDup(f)?' dup':'')+'"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+(isDup(f)?'<span class="dup-badge">重复</span>':'')+'</div><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
     }
     html+='</div>'; fileListEl.innerHTML=html;
   } else {
     let html='<table><thead><tr><th></th><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
-      html+='<tr><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+      html+='<tr'+(isDup(f)?' style="background:color-mix(in srgb,var(--warn) 6%, transparent)"':'')+'><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isDup(f)?'<span class="dup-badge">重复</span>':'')+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
     }
     html+='</tbody></table>'; fileListEl.innerHTML=html;
   }
@@ -267,6 +270,10 @@ $('bulkDel')?.addEventListener('click', async()=>{
   if(!(await modalPrompt({title:'批量删除',body:`确定将 ${names.length} 个文件移入回收站？`,sub:'可在回收站还原',okText:'删除',danger:true}))) return;
   let ok=0; for(const n of names){ const r=await fetch('/api/files?name='+encodeURIComponent(n)+'&'+authPair(),{method:'DELETE'}); if(r.ok){ ok++; logActivity('del', n); } }
   toast(`已移入回收站 ${ok}/${names.length}`,'ok'); loadFiles();
+});
+$('dupToggle')?.addEventListener('click',()=>{
+  curDupOnly=!curDupOnly; const b=$('dupToggle'); if(b){ b.style.background=curDupOnly?'var(--warn)':''; b.style.color=curDupOnly?'#fff':''; }
+  curPage=1; renderFiles(); toast(curDupOnly?'仅显示重复文件':'已显示全部','info');
 });
 (function initViewMode(){
   const sel=$('viewMode'); if(!sel) return;
