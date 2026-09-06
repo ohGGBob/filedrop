@@ -818,6 +818,45 @@ fileListEl.addEventListener('click', async (e) => {
   }
 });
 
+// ---- 上下文菜单（右键/长按） ----
+const ctxMenu=$('ctxMenu');
+function hideCtx(){ if(ctxMenu) ctxMenu.style.display='none'; }
+function showCtx(name, x, y){
+  if(!ctxMenu) return;
+  ctxMenu.innerHTML='';
+  const items=[
+    ['⬇️ 下载', async()=>{ logActivity('download', name); if(isIOS){ /* 复用下载逻辑 */ const r=await fetch('/api/download?name='+encodeURIComponent(name)); const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name.split('/').pop(); a.click(); setTimeout(()=>URL.revokeObjectURL(url),6000);} else { const a=document.createElement('a'); a.href='/api/download?name='+encodeURIComponent(name); a.download=name.split('/').pop(); a.click(); } }],
+    ['👁️ 预览', ()=> showPreview(name)],
+    ['⭐ 收藏', ()=> toggleFav(name)],
+    ['✏️ 重命名', async()=>{ const nn=await inputModal('重命名','输入新文件名', name); if(nn&&nn!==name){ const r=await fetch('/api/rename?'+authPair(),{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, newName:nn})}); if(r.ok){ logActivity('rename', nn); loadFiles(); } } }],
+    ['🕘 历史', async()=>{ const a=document.querySelector(`a[data-act="history"][data-name="${CSS.escape(name)}"]`); if(a) a.click(); }],
+    ['🗑️ 删除', async()=>{ const a=document.querySelector(`a[data-act="del"][data-name="${CSS.escape(name)}"]`); if(a) a.click(); }],
+  ];
+  for(const [label, fn] of items){
+    const d=document.createElement('div'); d.className='ctx-item'+(label.includes('删除')?' danger':''); d.textContent=label; d.addEventListener('click', ()=>{ hideCtx(); fn(); }); ctxMenu.appendChild(d);
+  }
+  ctxMenu.style.left=Math.min(x, window.innerWidth-180)+'px';
+  ctxMenu.style.top=Math.min(y, window.innerHeight-240)+'px';
+  ctxMenu.style.display='block';
+}
+fileListEl.addEventListener('contextmenu', e=>{
+  const row=e.target.closest('[data-name], [data-folder]');
+  const name=row?.dataset.name || row?.dataset.folder;
+  if(!name || row?.dataset.folder) return; // 文件夹不弹
+  e.preventDefault(); showCtx(name, e.clientX, e.clientY);
+});
+let touchTimer=null, touchName=null;
+fileListEl.addEventListener('touchstart', e=>{
+  const row=e.target.closest('[data-name]');
+  if(!row) return;
+  touchName=row.dataset.name;
+  touchTimer=setTimeout(()=>{ const t=e.touches[0]; showCtx(touchName, t.clientX, t.clientY); }, 520);
+}, {passive:true});
+fileListEl.addEventListener('touchend', ()=>{ clearTimeout(touchTimer); }, {passive:true});
+fileListEl.addEventListener('touchmove', ()=>{ clearTimeout(touchTimer); }, {passive:true});
+window.addEventListener('click', e=>{ if(!e.target.closest('#ctxMenu')) hideCtx(); });
+window.addEventListener('scroll', hideCtx, {passive:true});
+
 // ---- 回收站 ----
 async function loadTrash(){
   const el=$('trashList'), cnt=$('trashCount'), act=$('trashActions');
