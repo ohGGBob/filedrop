@@ -1203,3 +1203,23 @@ document.addEventListener('keydown',(e)=>{
 });
 // 输入框长度保护
 if(prefixInput) prefixInput.maxLength=32;
+// 自动更新检查（GitHub Releases，失败静默）
+async function checkUpdate(){
+  try{
+    const local=$('verBadge')?.textContent?.trim().replace(/^v/,'') || '';
+    if(!local) return;
+    const r=await fetch('https://api.github.com/repos/ohGGBob/filedrop/releases/latest', {headers:{'Accept':'application/vnd.github+json'}});
+    if(!r.ok) return;
+    const j=await r.json();
+    const remote=(j.tag_name||'').replace(/^v/,'');
+    if(!remote || remote===local) return;
+    const cmp=(a,b)=>{ const pa=a.split('.').map(Number), pb=b.split('.').map(Number); for(let i=0;i<3;i++){ if((pa[i]||0)>(pb[i]||0)) return 1; if((pa[i]||0)<(pb[i]||0)) return -1; } return 0; };
+    if(cmp(remote,local)<=0) return;
+    const b=$('updateBanner'); if(!b) return;
+    b.style.display='flex';
+    b.innerHTML='<span style="flex:1">🎉 发现新版本 <b>v'+escapeHtml(remote)+'</b>（当前 v'+escapeHtml(local)+'）— 去 Releases 获取</span><a class="dl" href="https://github.com/ohGGBob/filedrop/releases/latest" target="_blank" rel="noopener">立即查看</a><button id="updateDismiss" style="margin-left:6px">忽略</button>';
+    $('updateDismiss')?.addEventListener('click',()=> b.style.display='none');
+    toast('发现新版本 v'+remote,'info');
+  }catch(_){}
+}
+setTimeout(checkUpdate, 1800);
