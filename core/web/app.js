@@ -19,6 +19,17 @@ const drop = $('drop'), fileInput = $('file'), upBar = $('upBar'), upStatus = $(
 const addrEl = $('addr'), copyBtn = $('copyAddr'), fileListEl = $('fileList');
 const recvDirEl = $('recvDir'), dirInput = $('dirInput'), prefixInput = $('prefixInput');
 const PREFIX_KEY = 'fd_prefix';
+const THEME_KEY='fd_theme';
+
+// 主题：跟随系统，本地记忆覆盖
+(function initTheme(){
+  const saved=localStorage.getItem(THEME_KEY);
+  const prefersDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const theme=saved||(prefersDark?'dark':'light');
+  if(theme==='dark') document.documentElement.setAttribute('data-theme','dark');
+  const btn=$('themeToggle');
+  if(btn){btn.addEventListener('click',()=>{const isDark=document.documentElement.getAttribute('data-theme')==='dark';const next=isDark?'light':'dark';if(next==='dark')document.documentElement.setAttribute('data-theme','dark');else document.documentElement.removeAttribute('data-theme');localStorage.setItem(THEME_KEY,next);toast(next==='dark'?'已切换深色':'已切换浅色','info')})}
+})();
 
 // 下载文件名前缀（存在手机/浏览器本地，默认加 FileDrop_ 便于在下载目录里识别）
 function getPrefix() {
@@ -43,6 +54,51 @@ function fmtTime(s) {
 }
 function setStatus(t) { upStatus.textContent = t; }
 
+// ---- 统一非阻塞提示 toast ----
+// 关键成功 / 失败 / 警告用一条短暂浮层提示，替代散落的小号 meta 文字与打断式原生 alert()。
+// 用法：toast('已复制', 'ok'); toast('删除失败', 'err'); toast('请注意', 'warn'); toast('信息', 'info');
+function toast(msg, kind) {
+  const wrap = document.getElementById('toastWrap');
+  if (!wrap) return;
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind || 'info');
+  el.textContent = msg;
+  wrap.appendChild(el);
+  // 触发动画后再移除，避免刚插入就被清掉导致无动画
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => el.remove(), 1500);
+}
+
+// ---- 页内选择弹层（替代原生 confirm / prompt，语义更清晰、风格更统一）----
+// 返回 Promise，resolve 为 true / false；type 可为 'confirm'（确定/取消）或 'choice'（自定义两按钮文本）。
+function modalPrompt({ title, body, sub, okText = '确定', cancelText = '取消', danger = false }) {
+  return new Promise((resolve) => {
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+    const box = document.createElement('div');
+    box.className = 'modal';
+    const h = document.createElement('h3'); h.textContent = title;
+    const p = document.createElement('p'); p.textContent = body;
+    box.appendChild(h); box.appendChild(p);
+    if (sub) { const s = document.createElement('div'); s.className = 'msub'; s.textContent = sub; box.appendChild(s); }
+    const mac = document.createElement('div'); mac.className = 'mact';
+    const cancel = document.createElement('button'); cancel.textContent = cancelText;
+    const ok = document.createElement('button'); ok.className = danger ? '' : 'primary'; ok.textContent = okText;
+    if (danger) { ok.style.background = 'var(--err)'; ok.style.borderColor = 'var(--err)'; ok.style.color = '#fff'; }
+    const close = (v) => { mask.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); if (e.key === 'Enter') close(true); };
+    cancel.addEventListener('click', () => close(false));
+    ok.addEventListener('click', () => close(true));
+    mask.addEventListener('click', (e) => { if (e.target === mask) close(false); });
+    mac.append(cancel, ok);
+    box.appendChild(mac);
+    mask.appendChild(box);
+    document.body.appendChild(mask);
+    document.addEventListener('keydown', onKey);
+    ok.focus();
+  });
+}
+
 // ---- 本机地址 ----
 async function loadInfo() {
   try {
@@ -51,6 +107,7 @@ async function loadInfo() {
       const j = await r.json();
       const url = j.url || (j.ip + ':' + j.port);
       addrEl.textContent = url;
+      if(j.version){ const vb=$('verBadge'), fv=$('footVer'); if(vb) vb.textContent='v'+j.version; if(fv) fv.textContent='v'+j.version+' · 已就绪'; }
       if (/^https?:\/\//.test(url)) {
         const qr = document.getElementById('qr');
         qr.src = '/api/qr?text=' + encodeURIComponent(url);
@@ -92,8 +149,15 @@ function flashCopied(btn, ok) {
 }
 
 copyBtn.addEventListener('click', async () => {
-  flashCopied(copyBtn, await copyText(addrEl.textContent));
+  const ok=await copyText(addrEl.textContent);
+  flashCopied(copyBtn, ok);
+  toast(ok?'已复制连接地址':'复制失败，请长按选择','info');
 });
+$('refreshInfo')?.addEventListener('click', loadInfo);
+$('refreshFiles')?.addEventListener('click', loadFiles);
+$('aboutBtn')?.addEventListener('click', ()=> modalPrompt({title:'关于 FileDrop',body:'FileDrop · 局域网文件快传 · 便携商业版',sub:'分块断点续传 · SHA256校验 · 二维码秒连 · 局域网发现 · 文本快传 · 单文件便携',okText:'知道了',cancelText:'关闭'}));
+$('previewClose')?.addEventListener('click',()=>{$('previewMask').style.display='none'});
+$('previewMask')?.addEventListener('click',(e)=>{if(e.target.id==='previewMask') e.currentTarget.style.display='none'});
 
 // ---- 文件列表 ----
 const zipSelBtn = $('zipSel');
@@ -108,31 +172,51 @@ function refreshZipBtn() {
   zipSelBtn.style.display = selectedNames().length ? '' : 'none';
 }
 
+let allFiles=[], curSearch='', curSort='mtime_desc', curPage=1; const PAGE_SIZE=20;
+function fileIcon(name){const ext=(name.split('.').pop()||'').toLowerCase();const map={jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',mp4:'🎬',mov:'🎬',avi:'🎬',mkv:'🎬',mp3:'🎵',wav:'🎵',pdf:'📄',zip:'🗜️',rar:'🗜️',docx:'📝',xlsx:'📊',pptx:'📊',txt:'📃'};return map[ext]||'📦'}
+function isPreviewable(name){return /\.(jpg|jpeg|png|gif|webp|txt|md|log|json|csv|html|pdf|mp4|mp3)$/i.test(name)}
+function showPreview(name){
+  const mask=$('previewMask'), body=$('previewBody'), title=$('previewTitle');
+  if(!mask) return; title.textContent=name; body.textContent='加载中…'; mask.style.display='flex';
+  const url='/api/download?name='+encodeURIComponent(name);
+  if(/\.(jpg|jpeg|png|gif|webp)$/i.test(name)){body.innerHTML='<img src="'+url+'" style="max-width:100%;border-radius:10px;border:1px solid var(--border)" />';}
+  else if(/\.(mp4|mov|webm)$/i.test(name)){body.innerHTML='<video src="'+url+'" controls style="max-width:100%;border-radius:10px"></video>';}
+  else if(/\.pdf$/i.test(name)){body.innerHTML='<iframe src="'+url+'" style="width:100%;height:55vh;border:1px solid var(--border);border-radius:10px"></iframe>';}
+  else { fetch(url).then(r=>r.text()).then(t=>{body.innerHTML='<pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:10px;border-radius:10px;border:1px solid var(--border);max-height:55vh;overflow:auto">'+escapeHtml(t.slice(0,200000))+'</pre>'}).catch(()=>body.textContent='预览失败');}
+}
+function renderFiles(){
+  let list=[...allFiles];
+  if(curSearch) {const k=curSearch.toLowerCase(); list=list.filter(f=>f.name.toLowerCase().includes(k));}
+  if(curSort==='name_asc') list.sort((a,b)=>a.name.localeCompare(b.name));
+  else if(curSort==='size_desc') list.sort((a,b)=>b.size-a.size);
+  else if(curSort==='size_asc') list.sort((a,b)=>a.size-b.size);
+  else if(curSort==='mtime_asc') list.sort((a,b)=>a.mtime-b.mtime);
+  else list.sort((a,b)=>b.mtime-a.mtime);
+  const total=list.length; const pages=Math.max(1,Math.ceil(total/PAGE_SIZE)); if(curPage>pages) curPage=pages;
+  const slice=list.slice((curPage-1)*PAGE_SIZE, curPage*PAGE_SIZE);
+  const cntEl=$('fileCount'); if(cntEl) cntEl.textContent=total?`共 ${total} 个 · 第 ${curPage}/${pages} 页`:'';
+  const pager=$('filePager'); if(pager){pager.style.display=total>PAGE_SIZE?'':'none'; pager.textContent=''; for(let i=1;i<=pages;i++){const b=document.createElement('button');b.textContent=String(i);if(i===curPage)b.className='cur';b.addEventListener('click',()=>{curPage=i;renderFiles()});pager.appendChild(b);} }
+  if(!slice.length){ fileListEl.innerHTML='<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>'+(curSearch?'无匹配结果':'本机还没有可下载的文件')+'</div>'; if(zipSelBtn) zipSelBtn.style.display='none'; return; }
+  let html='<table><thead><tr><th></th><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
+  const prefix=getPrefix();
+  for(const f of slice){
+    const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
+    html+='<tr><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+  }
+  html+='</tbody></table>'; fileListEl.innerHTML=html; refreshZipBtn();
+}
 async function loadFiles() {
   try {
     const r = await fetch('/api/files');
     if (!r.ok) throw new Error('list ' + r.status);
-    const list = await r.json();
-    if (!list.length) { fileListEl.innerHTML = '<div class="empty">本机还没有可下载的文件</div>'; if (zipSelBtn) zipSelBtn.style.display = 'none'; return; }
-    let html = '<table><thead><tr><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
-    const prefix = getPrefix();
-    for (const f of list) {
-      const enc = encodeURIComponent(f.name);
-      const dlName = prefix + (f.name.split('/').pop());
-      html += '<tr><td><label style="display:flex;gap:6px;align-items:center;">' +
-        '<input type="checkbox" data-name="' + escapeHtml(f.name) + '" />' +
-        '<span>' + escapeHtml(f.name) + '</span></label></td><td class="size">' + fmtSize(f.size) +
-        '</td><td><a class="dl" href="/api/download?name=' + enc + '" download="' + escapeHtml(dlName) + '">下载</a>' +
-        ' · <a href="#" class="dl" data-act="rename" data-name="' + escapeHtml(f.name) + '">重命名</a>' +
-        ' · <a href="#" class="dl" data-act="del" data-name="' + escapeHtml(f.name) + '">删除</a></td></tr>';
-    }
-    html += '</tbody></table>';
-    fileListEl.innerHTML = html;
-    refreshZipBtn();
+    allFiles = await r.json();
+    renderFiles();
   } catch (e) {
     fileListEl.innerHTML = '<div class="empty">列表加载失败：' + escapeHtml(String(e)) + '</div>';
   }
 }
+$('searchInput')?.addEventListener('input',(e)=>{curSearch=e.target.value;curPage=1;renderFiles()});
+$('sortSelect')?.addEventListener('change',(e)=>{curSort=e.target.value;renderFiles()});
 
 if (zipSelBtn) {
   zipSelBtn.addEventListener('click', () => {
@@ -378,11 +462,14 @@ async function runTask(t) {
   // 同名同大小的文件已在本机，但内容指纹对不上：问一次「覆盖还是共存」，
   // 选择记到会话里，本批后面的同名冲突沿用，不为每张照片都弹一次窗。
   if (st.exists && !t.overwrite && conflictChoice === null) {
-    conflictChoice = confirm(
-      '本机已有同名同大小的「' + name + '」，但内容不同。\n\n' +
-      '确定 = 覆盖旧文件（本批全部同名冲突都覆盖）\n' +
-      '取消 = 两份都保留，新文件自动改名（本批全部共存）'
-    ) ? 'overwrite' : 'keep';
+    conflictChoice = (await modalPrompt({
+      title: '已有同名文件',
+      body: '本机已有同名同大小的「' + name + '」，但内容不同。',
+      sub: '「覆盖」会用新文件替换旧文件（本批所有同名冲突都覆盖）；「两份都保留」会把新文件自动改名，旧文件不动（本批所有同名冲突都共存）。',
+      okText: '覆盖',
+      cancelText: '两份都保留',
+      danger: true,
+    })) ? 'overwrite' : 'keep';
   }
   if (st.exists && conflictChoice === 'overwrite') t.overwrite = true;
   const missing = (st.missing || []).slice();
@@ -481,6 +568,7 @@ const supportsDirPick = (() => {
 const folderInput = $('folder'), pickFolderBtn = $('pickFolderBtn');
 if (pickFolderBtn) {
   pickFolderBtn.style.display = supportsDirPick ? '' : 'none';
+  const fh=$('folderHint'); if(fh) fh.style.display=supportsDirPick?'':'none';
   if (supportsDirPick) {
     pickFolderBtn.addEventListener('click', () => folderInput.click());
     folderInput.addEventListener('change', () => { enqueueFiles(folderInput.files); folderInput.value = ''; });
@@ -509,22 +597,44 @@ fileListEl.addEventListener('click', async (e) => {
   const p = authPair();
   const tqs = p ? '&' + p : '';
   if (a.dataset.act === 'del') {
-    if (!confirm('确定删除 ' + name + ' ？')) return;
+    if (!(await modalPrompt({ title: '删除文件', body: '确定删除「' + name + '」？', sub: '此操作不可恢复。', okText: '删除', cancelText: '取消', danger: true }))) return;
     const r = await fetch('/api/files?name=' + encodeURIComponent(name) + tqs, { method: 'DELETE' });
     if (r.ok) loadFiles();
-    else { const j = await r.json().catch(() => ({})); alert('删除失败：' + (j.error || r.status)); }
+    else { const j = await r.json().catch(() => ({})); toast('删除失败：' + (j.error || r.status), 'err'); }
   } else if (a.dataset.act === 'rename') {
-    const nn = prompt('新文件名：', name);
+    const nn = await inputModal('重命名', '输入新文件名', name);
     if (!nn || nn === name) return;
     const r = await fetch('/api/rename?' + authPair(), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name, newName: nn })
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) loadFiles();
-    else alert('重命名失败：' + (j.error || r.status));
+    if (r.ok) { toast('已重命名','ok'); loadFiles(); }
+    else toast('重命名失败：' + (j.error || r.status), 'err');
+  } else if (a.dataset.act === 'preview') {
+    showPreview(name);
   }
 });
+
+function inputModal(title, body, defVal){
+  return new Promise((resolve)=>{
+    const mask=document.createElement('div');mask.className='modal-mask';
+    const box=document.createElement('div');box.className='modal';
+    const h=document.createElement('h3');h.textContent=title;
+    const p=document.createElement('p');p.textContent=body;
+    const inp=document.createElement('input');inp.value=defVal||'';inp.placeholder='新文件名';
+    const mact=document.createElement('div');mact.className='mact';
+    const cancel=document.createElement('button');cancel.textContent='取消';
+    const ok=document.createElement('button');ok.className='primary';ok.textContent='确定';
+    const close=(v)=>{mask.remove();document.removeEventListener('keydown',onKey);resolve(v);};
+    const onKey=(e)=>{if(e.key==='Escape')close(null);if(e.key==='Enter')close(inp.value.trim());};
+    cancel.addEventListener('click',()=>close(null));
+    ok.addEventListener('click',()=>close(inp.value.trim()));
+    mask.addEventListener('click',(e)=>{if(e.target===mask)close(null);});
+    mact.append(cancel,ok);box.append(h,p,inp,mact);mask.appendChild(box);document.body.appendChild(mask);
+    document.addEventListener('keydown',onKey); inp.focus(); inp.select();
+  });
+}
 
 // ---- 传文字（剪贴板快传）----
 // 正文一律走 textContent：便签里可能就是别人贴来的一段 HTML / 脚本，
@@ -889,10 +999,10 @@ async function purgePartials(name) {
   try {
     const r = await fetch(qs, { method: 'DELETE' });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { alert('清理失败：' + (j.error || r.status)); return; }
+    if (!r.ok) { toast('清理失败：' + (j.error || r.status), 'err'); return; }
     setStatus('已清理 ' + (j.removed || 0) + ' 项中断的传输');
     loadPartials();
-  } catch (e) { alert('清理失败：' + e); }
+  } catch (e) { toast('清理失败：' + e, 'err'); }
 }
 
 if (partialListEl) {
@@ -900,13 +1010,13 @@ if (partialListEl) {
     const a = e.target.closest('a[data-act="purge"]');
     if (!a) return;
     e.preventDefault();
-    if (!confirm('清理「' + a.dataset.name + '」尚未传完的数据？')) return;
+    if (!(await modalPrompt({ title: '清理中断的传输', body: '清理「' + a.dataset.name + '」尚未传完的数据？', sub: '未传完的临时数据会被删除，已传完的文件不受影响。', okText: '清理', cancelText: '取消', danger: true }))) return;
     await purgePartials(a.dataset.name);
   });
 }
 if (purgeAllBtn) {
   purgeAllBtn.addEventListener('click', async () => {
-    if (!confirm('清理所有中断的传输？未传完的数据会被删除，已传完的文件不受影响。')) return;
+    if (!(await modalPrompt({ title: '清理所有中断的传输', body: '清理所有尚未传完的临时数据？', sub: '未传完的数据会被删除，已传完的文件不受影响。', okText: '全部清理', cancelText: '取消', danger: true }))) return;
     await purgePartials('');
   });
 }
@@ -927,16 +1037,16 @@ async function loadSettings() {
 
 $('saveDir').addEventListener('click', async () => {
   const d = dirInput.value.trim();
-  if (!d) { alert('请先填写目录路径'); return; }
+  if (!d) { toast('请先填写目录路径', 'warn'); return; }
   try {
     const r = await fetch('/api/settings?' + authPair(), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: d })
     });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { alert('切换失败：' + (j.error || r.status)); return; }
+    if (!r.ok) { toast('切换失败：' + (j.error || r.status), 'err'); return; }
     loadSettings();
     loadFiles();
-  } catch (e) { alert('切换失败：' + e); }
+  } catch (e) { toast('切换失败：' + e, 'err'); }
 });
 
 $('pickFolder').addEventListener('click', async () => {
@@ -944,8 +1054,8 @@ $('pickFolder').addEventListener('click', async () => {
     const r = await fetch('/api/pick-folder?' + authPair(), { method: 'POST' });
     const j = await r.json().catch(() => ({}));
     if (j.path) dirInput.value = j.path;
-    else if (j.error) alert('打开文件夹选择器失败：' + j.error);
-  } catch (e) { alert('无法打开选择器：' + e); }
+    else if (j.error) toast('打开文件夹选择器失败：' + j.error, 'err');
+  } catch (e) { toast('无法打开选择器：' + e, 'err'); }
 });
 
 $('openFolder').addEventListener('click', () => { fetch('/api/open-folder?' + authPair(), { method: 'POST' }); });
@@ -975,3 +1085,11 @@ if (askList) {
   refreshPending();
   setInterval(refreshPending, 4000);
 }
+// ---- 键盘快捷键（商业级效率） ----
+document.addEventListener('keydown',(e)=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('searchInput')?.focus();}
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='u'){e.preventDefault();$('drop')?.click();}
+  if(e.key==='Escape'){const m=$('previewMask');if(m&&m.style.display!=='none') m.style.display='none';}
+});
+// 输入框长度保护
+if(prefixInput) prefixInput.maxLength=32;

@@ -132,7 +132,21 @@ func loadBitmap(dir, name string, size int64) []byte {
 }
 
 func writeBitmap(dir, name string, size int64, bits []byte) error {
-	return os.WriteFile(bitsPath(dir, name, size), bits, 0o644)
+	p := bitsPath(dir, name, size)
+	if err := os.WriteFile(p, bits, 0o644); err != nil {
+		return err
+	}
+	// 同步到位图落盘，避免断电丢位图导致重传判断错
+	if f, err := os.OpenFile(p, os.O_RDWR, 0o644); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
+	}
+	return nil
+}
+
+func hasDiskSpace(dir string, need int64) bool {
+	const reserve = 64 * 1024 * 1024
+	return checkFreeSpace(dir, need+reserve)
 }
 
 // missingChunks 返回所有未收到的分块下标。
@@ -168,14 +182,15 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 		badName(w)
 		return
 	}
-	if err != nil || size <= 0 {
+	if err != nil || size <= 0 || size > 20*1024*1024*1024 {
 		jsonErr(w, http.StatusBadRequest, "bad params")
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	dir := s.Dir()
+	lk := s.chunkLock(dir + "|" + name + "|" + strconv.FormatInt(size, 10))
+	lk.Lock()
+	defer lk.Unlock()
 
 	// 同名同大小的完整文件已存在，且客户端带的取样指纹对得上 → 才敢直接判完成。
 	// 只看「同名 + 同大小」不够：那正是「改了内容重新导出一份」最容易撞上的组合，
@@ -249,9 +264,15 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	dir := s.Dir()
+	lk := s.chunkLock(dir + "|" + name + "|" + strconv.FormatInt(size, 10))
+	lk.Lock()
+	defer lk.Unlock()
+
+	if !hasDiskSpace(dir, int64(len(body))) {
+		jsonErr(w, http.StatusInsufficientStorage, "磁盘空间不足")
+		return
+	}
 
 	// 文件夹上传的 name 带子路径（"相册/IMG_1.jpg"），先确保子目录存在
 	if err := os.MkdirAll(filepath.Dir(partPath(dir, name, size)), 0o755); err != nil {
@@ -270,6 +291,7 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "write part")
 		return
 	}
+	_ = f.Sync()
 	_ = f.Close()
 
 	bits[index] = 1

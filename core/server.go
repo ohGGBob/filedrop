@@ -32,9 +32,11 @@ import (
 //go:embed all:web
 var webFS embed.FS
 
+var startTime = time.Now()
+
 // Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘 / 安卓 App。
 // CI 会把这里提取的值注入安卓 gradle 的 versionName——改这里，两边一起变。
-const Version = "0.7.0"
+const Version = "1.0.0"
 
 // Server 是一个 FileDrop 实例。
 type Server struct {
@@ -50,11 +52,19 @@ type Server struct {
 	token string
 	ip    string
 	hub   *eventHub
-	mu    sync.Mutex // 保护上传落盘 / 重命名 / 文件管理
+	mu    sync.Mutex // 保护重命名 / 文件管理 / 目录切换等全局操作
 
 	// notesMu 单独保护便签文件。它和 s.mu 管的是互不相干的东西，
 	// 分开放就不会出现「写一段便签要等某个 GB 级分块落盘」。
 	notesMu sync.Mutex
+
+	// chunkMu 细粒度保护单个文件的分块写入：不同文件的分块可并行，
+	// 同一文件的多块串行更新位图，避免全局 s.mu 成为 4GB 传输的单线程瓶颈。
+	chunkMu    sync.Mutex
+	chunkLocks map[string]*sync.Mutex
+
+	rateMu sync.Mutex
+	rate   map[string]*rateBucket
 
 	// 设备发现：id 是本实例的随机标识（重启即换，避免旧列表里认错了机器），
 	// deviceName 用主机名，只为了在别人的列表里看得懂这是哪台。
@@ -99,6 +109,8 @@ func New(port int, dir string, noAuth bool) *Server {
 		Port: port, dir: dir, NoAuth: noAuth, token: token, ip: lanIP(), hub: newEventHub(),
 		id: randHex(8), deviceName: deviceNameOf(),
 		peers: newPeerTable(), access: newPeerAccess(),
+		chunkLocks: make(map[string]*sync.Mutex),
+		rate:       make(map[string]*rateBucket),
 	}
 	// 首次启动把令牌写进配置；已持久化的令牌原样保留即可
 	if cfg, err := loadConfig(); err != nil || strings.TrimSpace(cfg.Token) == "" {
@@ -151,7 +163,51 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/", s.apiHandler)
 	mux.Handle("/", s.fileServer())
-	return mux
+	return s.withRateLimit(mux)
+}
+
+// ---------- 限流 ----------
+type rateBucket struct {
+	window time.Time
+	count  int
+}
+
+func (s *Server) allow(ip string) bool {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	now := time.Now()
+	b, ok := s.rate[ip]
+	if !ok || now.Sub(b.window) > time.Second {
+		s.rate[ip] = &rateBucket{window: now, count: 1}
+		return true
+	}
+	b.count++
+	// 单 IP 每秒 60 次写/读足以支撑 3 并发分块，超过视作刷接口
+	if b.count > 60 {
+		return false
+	}
+	return true
+}
+
+func (s *Server) withRateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.allow(peerIP(r)) {
+			jsonErr(w, http.StatusTooManyRequests, "请求过于频繁，请稍后重试")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) chunkLock(key string) *sync.Mutex {
+	s.chunkMu.Lock()
+	defer s.chunkMu.Unlock()
+	if m, ok := s.chunkLocks[key]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	s.chunkLocks[key] = m
+	return m
 }
 
 // ListenAndServe 阻塞监听；托盘等场景可在 goroutine 中调用。
@@ -183,6 +239,8 @@ func (s *Server) Shutdown() error {
 // ---------- 路由 ----------
 func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/api/health":
+		jsonOK(w, map[string]any{"ok": true, "version": Version, "uptime_ms": time.Since(startTime).Milliseconds()})
 	case "/api/info":
 		jsonOK(w, map[string]any{"ip": s.ip, "port": s.Port, "url": s.URL(), "version": Version})
 	case "/api/files":
@@ -271,11 +329,18 @@ func (s *Server) canWrite(r *http.Request) bool {
 	if s.NoAuth {
 		return true
 	}
+	// 兼容 Header 令牌，避免 URL 明文落历史/日志；查询参数仍保留以兼容二维码
+	if t := r.Header.Get("X-FileDrop-Token"); t != "" && t == s.token {
+		return true
+	}
 	if t := r.URL.Query().Get("t"); t != "" && t == s.token {
 		return true
 	}
 	// 对端批准过的临时授权：绑来源 IP 且会过期，比终身有效的配对令牌收敛。
 	if g := r.URL.Query().Get("g"); g != "" && s.access.valid(g, peerIP(r)) {
+		return true
+	}
+	if g := r.Header.Get("X-FileDrop-Grant"); g != "" && s.access.valid(g, peerIP(r)) {
 		return true
 	}
 	return isLoopback(r)

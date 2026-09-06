@@ -20,6 +20,14 @@ jobs:
           go-version: '1.23'
           cache: true
 
+      - name: Vet & Test (race)
+        shell: pwsh
+        run: |
+          go vet ./...
+          go test -race -count=1 ./core -run TestSafeName
+          go test -race -count=1 ./core -run TestQR
+          go test -race -count=1 ./core -run TestUnique
+
       - name: Build filedrop.exe / filedrop-tray.exe
         shell: pwsh
         run: |

@@ -54,23 +54,35 @@ object Uploader {
         code
     } catch (_: Exception) { -1 }
 
-    /** 顺序读完 [InputStream] 的前 off 字节后读出 len 字节（配合重开的流做“定位读”）。 */
+    /** 高效定位读：优先用 FileChannel.position 零拷贝定位，退化到 skip 兜底。 */
     private fun readChunk(open: () -> InputStream, off: Long, len: Int, buf: ByteArray): Int? {
         val ins = open()
         return try {
-            var skipped = 0L
-            while (skipped < off) {
-                val n = ins.skip(off - skipped)
-                if (n <= 0) return null // 流不支持定位 / 已到头
-                skipped += n
+            if (ins is java.io.FileInputStream) {
+                val ch = ins.channel
+                ch.position(off)
+                var filled = 0
+                while (filled < len) {
+                    val n = ins.read(buf, filled, len - filled)
+                    if (n < 0) break
+                    filled += n
+                }
+                filled
+            } else {
+                var skipped = 0L
+                while (skipped < off) {
+                    val n = ins.skip(off - skipped)
+                    if (n <= 0) return null
+                    skipped += n
+                }
+                var filled = 0
+                while (filled < len) {
+                    val n = ins.read(buf, filled, len - filled)
+                    if (n < 0) break
+                    filled += n
+                }
+                filled
             }
-            var filled = 0
-            while (filled < len) {
-                val n = ins.read(buf, filled, len - filled)
-                if (n < 0) break
-                filled += n
-            }
-            filled
         } finally {
             ins.close()
         }
