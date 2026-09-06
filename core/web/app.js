@@ -199,7 +199,7 @@ function refreshZipBtn() {
   updateSelCount();
 }
 
-let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curDupOnly=false, curFavOnly=false, curFolder='', curPage=1; const PAGE_SIZE=20;
+let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curDupOnly=false, curFavOnly=false, curTag='', curFolder='', curPage=1; const PAGE_SIZE=20;
 function getSubfolders(){
   const set=new Set();
   const prefix=curFolder?curFolder+'/':'';
@@ -231,6 +231,18 @@ function isFav(name){ return getFavSet().has(name); }
 function toggleFav(name){
   const s=getFavSet(); if(s.has(name)) s.delete(name); else s.add(name);
   localStorage.setItem(FAV_KEY, JSON.stringify([...s])); renderFiles();
+}
+const TAG_KEY='fd_tags';
+function getTagMap(){ try{ return JSON.parse(localStorage.getItem(TAG_KEY)||'{}'); }catch(_){ return {}; } }
+function getTags(name){ const m=getTagMap(); return m[name]||[]; }
+function setTags(name, tags){ const m=getTagMap(); if(tags.length) m[name]=tags; else delete m[name]; localStorage.setItem(TAG_KEY, JSON.stringify(m)); refreshTagFilter(); }
+function getAllTags(){ const m=getTagMap(); const s=new Set(); Object.values(m).forEach(arr=>arr.forEach(t=>s.add(t))); return [...s].sort(); }
+function refreshTagFilter(){
+  const sel=$('tagFilter'); if(!sel) return;
+  const cur=sel.value;
+  const tags=getAllTags();
+  sel.innerHTML='<option value="">全部标签</option>'+tags.map(t=>'<option value="'+escapeHtml(t)+'">'+escapeHtml(t)+'</option>').join('');
+  sel.value=cur;
 }
 function fileIcon(name){const ext=(name.split('.').pop()||'').toLowerCase();const map={jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',mp4:'🎬',mov:'🎬',avi:'🎬',mkv:'🎬',mp3:'🎵',wav:'🎵',pdf:'📄',zip:'🗜️',rar:'🗜️',docx:'📝',xlsx:'📊',pptx:'📊',txt:'📃'};return map[ext]||'📦'}
 function fileType(name){const ext=(name.split('.').pop()||'').toLowerCase(); if(['jpg','jpeg','png','gif','webp','heic','bmp','svg'].includes(ext)) return 'image'; if(['mp4','mov','avi','mkv','webm','m4v'].includes(ext)) return 'video'; if(['mp3','wav','aac','flac','ogg','m4a'].includes(ext)) return 'audio'; if(['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','md','csv','json','html'].includes(ext)) return 'doc'; if(['zip','rar','7z','tar','gz','bz2'].includes(ext)) return 'archive'; return 'other';}
@@ -264,6 +276,7 @@ function renderFiles(){
   const isDup=f=> f.sha256 && dupMap.get(f.sha256)>1;
   if(curDupOnly) list=list.filter(isDup);
   if(curFavOnly) list=list.filter(f=>isFav(f.name));
+  if(curTag) list=list.filter(f=>getTags(f.name).includes(curTag));
   // 文件夹层级过滤
   const folders=getSubfolders();
   const prefix=curFolder?curFolder+'/':'';
@@ -291,7 +304,7 @@ function renderFiles(){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
       const star=isFav(f.name)?'⭐':'☆';
       const shortName=f.name.startsWith(prefix)?f.name.slice(prefix.length):f.name;
-      html+='<div class="fcard'+(isDup(f)?' dup':'')+'"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(shortName)+(isDup(f)?'<span class="dup-badge">重复</span>':'')+'</div><button data-act="fav" data-name="'+escapeHtml(f.name)+'" style="background:none;border:none;cursor:pointer;font-size:14px" title="收藏">'+star+'</button><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
+      html+='<div class="fcard'+(isDup(f)?' dup':'')+'"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(shortName)+(isDup(f)?'<span class="dup-badge">重复</span>':'')+getTags(f.name).map(t=>'<span style="font-size:10px;background:var(--soft);border:1px solid var(--border);padding:1px 5px;border-radius:999px;margin-left:4px">'+escapeHtml(t)+'</span>').join('')+'</div><button data-act="fav" data-name="'+escapeHtml(f.name)+'" style="background:none;border:none;cursor:pointer;font-size:14px" title="收藏">'+star+'</button><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="tag" data-name="'+escapeHtml(f.name)+'">标签</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
     }
     html+='</div>'; fileListEl.innerHTML=html;
   } else {
@@ -303,12 +316,12 @@ function renderFiles(){
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
       const star=isFav(f.name)?'⭐':'☆';
-      html+='<tr'+(isDup(f)?' style="background:color-mix(in srgb,var(--warn) 6%, transparent)"':'')+'><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><a href="#" data-act="fav" data-name="'+escapeHtml(f.name)+'" style="text-decoration:none;margin-right:4px">'+star+'</a><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name.split('/').pop())+'</span>'+(isDup(f)?'<span class="dup-badge">重复</span>':'')+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+      html+='<tr'+(isDup(f)?' style="background:color-mix(in srgb,var(--warn) 6%, transparent)"':'')+'><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><a href="#" data-act="fav" data-name="'+escapeHtml(f.name)+'" style="text-decoration:none;margin-right:4px">'+star+'</a><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name.split('/').pop())+'</span>'+(isDup(f)?'<span class="dup-badge">重复</span>':'')+getTags(f.name).map(t=>'<span style="font-size:10px;background:var(--soft);border:1px solid var(--border);padding:1px 5px;border-radius:999px;margin-left:4px">'+escapeHtml(t)+'</span>').join('')+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="tag" data-name="'+escapeHtml(f.name)+'">标签</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
     }
     html+='</tbody></table>'; fileListEl.innerHTML=html;
   }
   fileListEl.querySelectorAll('[data-folder]').forEach(el=> el.addEventListener('click', e=>{ e.preventDefault(); curFolder=el.getAttribute('data-folder')||''; curPage=1; renderFiles(); }));
-  refreshZipBtn(); updateStats();
+  refreshZipBtn(); refreshTagFilter(); updateStats();
 }
 async function loadFiles() {
   try {
@@ -339,6 +352,7 @@ $('favFilter')?.addEventListener('click',()=>{
   curFavOnly=!curFavOnly; const b=$('favFilter'); if(b){ b.style.background=curFavOnly?'var(--brand)':''; b.style.color=curFavOnly?'#fff':''; }
   curPage=1; renderFiles(); toast(curFavOnly?'仅显示收藏':'已显示全部','info');
 });
+$('tagFilter')?.addEventListener('change', e=>{ curTag=e.target.value; curPage=1; renderFiles(); });
 (function initViewMode(){
   const sel=$('viewMode'); if(!sel) return;
   const saved=localStorage.getItem('fd_view');
@@ -802,6 +816,10 @@ fileListEl.addEventListener('click', async (e) => {
     showPreview(name);
   } else if (a.dataset.act === 'fav') {
     toggleFav(name);
+  } else if (a.dataset.act === 'tag') {
+    const cur=getTags(name).join(', ');
+    const inp=await inputModal('标签','输入标签（逗号分隔，最多5个）', cur);
+    if(inp!==null){ const tags=inp.split(',').map(s=>s.trim()).filter(Boolean).slice(0,5); setTags(name, tags); toast(tags.length?'已更新标签':'已清除标签','ok'); }
   } else if (a.dataset.act === 'history') {
     try{
       const r=await fetch('/api/history?name='+encodeURIComponent(name));
@@ -825,9 +843,10 @@ function showCtx(name, x, y){
   if(!ctxMenu) return;
   ctxMenu.innerHTML='';
   const items=[
-    ['⬇️ 下载', async()=>{ logActivity('download', name); if(isIOS){ /* 复用下载逻辑 */ const r=await fetch('/api/download?name='+encodeURIComponent(name)); const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name.split('/').pop(); a.click(); setTimeout(()=>URL.revokeObjectURL(url),6000);} else { const a=document.createElement('a'); a.href='/api/download?name='+encodeURIComponent(name); a.download=name.split('/').pop(); a.click(); } }],
+    ['⬇️ 下载', async()=>{ logActivity('download', name); if(isIOS){ const r=await fetch('/api/download?name='+encodeURIComponent(name)); const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name.split('/').pop(); a.click(); setTimeout(()=>URL.revokeObjectURL(url),6000);} else { const a=document.createElement('a'); a.href='/api/download?name='+encodeURIComponent(name); a.download=name.split('/').pop(); a.click(); } }],
     ['👁️ 预览', ()=> showPreview(name)],
     ['⭐ 收藏', ()=> toggleFav(name)],
+    ['🏷️ 标签', async()=>{ const cur=getTags(name).join(', '); const inp=await inputModal('标签','输入标签（逗号分隔）', cur); if(inp!==null){ const tags=inp.split(',').map(s=>s.trim()).filter(Boolean).slice(0,5); setTags(name, tags); } }],
     ['✏️ 重命名', async()=>{ const nn=await inputModal('重命名','输入新文件名', name); if(nn&&nn!==name){ const r=await fetch('/api/rename?'+authPair(),{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, newName:nn})}); if(r.ok){ logActivity('rename', nn); loadFiles(); } } }],
     ['🕘 历史', async()=>{ const a=document.querySelector(`a[data-act="history"][data-name="${CSS.escape(name)}"]`); if(a) a.click(); }],
     ['🗑️ 删除', async()=>{ const a=document.querySelector(`a[data-act="del"][data-name="${CSS.escape(name)}"]`); if(a) a.click(); }],
