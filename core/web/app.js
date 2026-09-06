@@ -42,7 +42,7 @@ const I18N={
   en:{langBtn:'🌐 中文', themeBtn:'🌓 Theme', about:'About', heroTitle:'Connect in 1s · Drop & Go · No Cloud', heroDesc:'Same WiFi, scan to connect. 8MiB chunks · resume · SHA256 verified, even 4GB stays solid.', send:'Send (Upload)', recv:'Receive (Download)', trash:'Trash', searchPH:'Search files…', notePH:'Paste code / command / URL', copied:'Copied', switchEN:'Switched to English', switchZH:'Switched to Chinese'}
 };
 const LANG_KEY='fd_lang';
-function curLang(){return localStorage.getItem(LANG_KEY) || (navigator.language.startsWith('zh')?'zh':'zh');}
+function curLang(){return localStorage.getItem(LANG_KEY) || (navigator.language.startsWith('zh')?'zh':'en');}
 function t(k){const l=curLang(); return (I18N[l]&&I18N[l][k])||I18N.zh[k]||k;}
 function applyI18n(){
   const l=curLang();
@@ -96,8 +96,9 @@ function toast(msg, kind) {
   el.textContent = msg;
   wrap.appendChild(el);
   // 触发动画后再移除，避免刚插入就被清掉导致无动画
+  // 错误 / 警告停留更久：1.5 秒根本读不完一句报错
   requestAnimationFrame(() => el.classList.add('show'));
-  setTimeout(() => el.remove(), 1500);
+  setTimeout(() => el.remove(), kind === 'err' ? 3200 : kind === 'warn' ? 2600 : 1500);
 }
 
 // ---- 页内选择弹层（替代原生 confirm / prompt，语义更清晰、风格更统一）----
@@ -312,8 +313,8 @@ function updateStats(){
   $('statFiles') && ($('statFiles').textContent=String(files));
   $('statSize') && ($('statSize').textContent=fmtSize(size));
   $('statFav') && ($('statFav').textContent=String(fav));
-  // trash count async
-  fetch('/api/trash').then(r=>r.json()).then(list=>{ $('statTrash') && ($('statTrash').textContent=String(list.length)); }).catch(()=>{});
+  // trash count async（403/异常时保持占位，不显示 undefined）
+  fetch(authUrl('/api/trash')).then(r=>r.json()).then(list=>{ if($('statTrash') && Array.isArray(list)) $('statTrash').textContent=String(list.length); }).catch(()=>{});
 }
 function renderFiles(){
   renderBreadcrumb();
@@ -338,7 +339,16 @@ function renderFiles(){
   const slice=list.slice((curPage-1)*PAGE_SIZE, curPage*PAGE_SIZE);
   const cntEl=$('fileCount'); if(cntEl) cntEl.textContent=total?`共 ${total} 个 · 第 ${curPage}/${pages} 页`:'';
   const pager=$('filePager'); if(pager){pager.style.display=total>PAGE_SIZE?'':'none'; pager.textContent=''; for(let i=1;i<=pages;i++){const b=document.createElement('button');b.textContent=String(i);if(i===curPage)b.className='cur';b.addEventListener('click',()=>{curPage=i;renderFiles()});pager.appendChild(b);} }
-  if(!slice.length && folders.length===0){ fileListEl.innerHTML='<div class="empty"><div class="illus">∅</div><div>'+(curSearch?'无匹配结果':'还没有文件 — 拖拽或点击上传')+'</div><div class="hint">支持图片/视频/文档预览，长按卡片可多选</div></div>'; if(zipSelBtn) zipSelBtn.style.display='none'; updateStats(); return; }
+  if(!slice.length && folders.length===0){
+    // 首次使用引导：把「三步上手」直接放在文件列表的位置，比藏在帮助里更容易被看到
+    const guide = curSearch || curType || curTag || curDupOnly || curFavOnly ? '' :
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px">'+
+      '<div class="step"><i>1</i><div style="text-align:left"><b>手机连进来</b><div class="hint" style="margin:0">扫上方二维码，或浏览器输入连接地址</div></div></div>'+
+      '<div class="step"><i>2</i><div style="text-align:left"><b>选文件发送</b><div class="hint" style="margin:0">点上传区选择，或直接拖进来</div></div></div>'+
+      '<div class="step"><i>3</i><div style="text-align:left"><b>互相取走</b><div class="hint" style="margin:0">对方页面点「下载」，大文件可打包</div></div></div></div>';
+    fileListEl.innerHTML='<div class="empty"><div class="illus">📭</div><div>'+(curSearch?'无匹配结果 — 试试清空搜索或筛选':'这里还没有文件')+'</div><div class="hint">支持图片/视频/文档预览 · 长按卡片呼出菜单 · 重复文件自动标出</div>'+guide+'</div>';
+    if(zipSelBtn) zipSelBtn.style.display='none'; updateStats(); return;
+  }
   const vm=$('viewMode')?.value || 'auto';
   const useCards = vm==='cards' || (vm==='auto' && (window.innerWidth<720 || isIOS));
   const prefix=getPrefix();
@@ -378,7 +388,11 @@ async function loadFiles() {
     allFiles = await r.json();
     renderFiles();
   } catch (e) {
-    fileListEl.innerHTML = '<div class="empty">列表加载失败：' + escapeHtml(String(e)) + '</div>';
+    const msg = String(e);
+    const hint = msg.includes('403')
+      ? '本页没有读取权限 — 请用带令牌的地址打开（电脑端「本机连接地址」，手机扫码即得）'
+      : '列表加载失败：' + msg;
+    fileListEl.innerHTML = '<div class="empty"><div class="illus">⚠️</div><div>' + escapeHtml(hint) + '</div></div>';
   }
 }
 (() => {
@@ -713,7 +727,9 @@ async function runTask(t) {
       method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
       body: t.file.slice(begin, end), signal,
     });
-    if (!r.ok) throw new Error('分块 ' + i + ' 失败（HTTP ' + r.status + '）');
+    if (!r.ok) throw new Error(r.status === 403
+      ? '没有写权限 — 令牌可能已更换，请重新扫码进入'
+      : '分块 ' + i + ' 失败（HTTP ' + r.status + '）');
     t.sent++; t.bytes += chunkLen;
   };
 
@@ -792,7 +808,7 @@ async function runTask(t) {
       await Promise.all(j.missing.map(sendChunk));
       continue;
     }
-    throw new Error('收尾失败：' + (j.error || r.status));
+    throw new Error('收尾失败：' + (r.status === 403 ? '没有写权限，请重新扫码进入' : (j.error || r.status)));
   }
   throw new Error('收尾重试次数用尽');
 }
@@ -923,7 +939,7 @@ fileListEl.addEventListener('click', async (e) => {
     if(inp!==null){ const tags=inp.split(',').map(s=>s.trim()).filter(Boolean).slice(0,5); setTags(name, tags); toast(tags.length?'已更新标签':'已清除标签','ok'); }
   } else if (a.dataset.act === 'history') {
     try{
-      const r=await fetch('/api/history?name='+encodeURIComponent(name));
+      const r=await fetch(authUrl('/api/history?name='+encodeURIComponent(name)));
       const list=await r.json();
       if(!list.length) { toast('暂无历史版本','info'); return; }
       let html='<div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow:auto">';
@@ -985,9 +1001,9 @@ async function loadTrash(){
   const el=$('trashList'), cnt=$('trashCount'), act=$('trashActions');
   if(!el) return;
   try{
-    const r=await fetch('/api/trash');
+    const r=await fetch(authUrl('/api/trash'));
     const list=await r.json();
-    if(!list.length){ el.innerHTML='<div class="hint">回收站为空</div>'; if(cnt) cnt.textContent=''; if(act) act.style.display='none'; return; }
+    if(!Array.isArray(list) || !list.length){ el.innerHTML='<div class="hint">'+(Array.isArray(list)?'回收站为空':'回收站需要令牌权限')+'</div>'; if(cnt) cnt.textContent=''; if(act) act.style.display='none'; return; }
     if(cnt) cnt.textContent=list.length+' 项';
     if(act) act.style.display='';
     let html='<div style="display:flex;flex-direction:column;gap:6px">';
@@ -1366,7 +1382,7 @@ let filesRefreshTimer = null;
 let notesRefreshTimer = null;
 function listenEvents() {
   try {
-    const es = new EventSource('/api/events');
+    const es = new EventSource(authUrl('/api/events'));
     es.onmessage = (ev) => {
       try {
         const j = JSON.parse(ev.data);
@@ -1394,7 +1410,7 @@ const partialListEl = $('partialList'), purgeAllBtn = $('purgeAll');
 async function loadPartials() {
   if (!partialListEl) return;
   try {
-    const r = await fetch('/api/uploads');
+    const r=await fetch(authUrl('/api/uploads'));
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const list = await r.json();
     if (!list.length) {
@@ -1449,7 +1465,7 @@ if (purgeAllBtn) {
 // ---- 接收目录设置（电脑端） ----
 async function loadSettings() {
   try {
-    const r = await fetch('/api/settings');
+    const r = await fetch(authUrl('/api/settings'));
     if (r.ok) {
       const j = await r.json();
       recvDirEl.textContent = j.dir || '（未知）';
@@ -1527,7 +1543,19 @@ if (askList) {
 }
 // ---- 键盘快捷键（商业级效率） ----
 function showHelp(){
-  modalPrompt({title:'快捷键 · 帮助', body:'Ctrl+K 搜索  ·  Ctrl+U 上传  ·  ? 帮助  ·  Esc 关闭预览\n\n• 拖拽文件/文件夹到任意位置即可上传\n• 表格 ↔ 卡片视图自动/手动切换\n• 类型筛选 + 批量全选/反选/删除\n• iOS 单并发、鸿蒙/安卓共协议', sub:'FileDrop v1.0 · 精致便携 · 全平台', okText:'知道了', cancelText:'关闭'});
+  modalPrompt({title:'FileDrop 使用指南', body:
+'【三步上手】\n'+
+'1. 本机开 FileDrop，其他设备扫二维码（或浏览器输入连接地址）\n'+
+'2. 手机选文件发送 → 拖拽 / 点上传区 / 相册分享到 FileDrop App\n'+
+'3. 文件出现在「接收」列表，任一设备可下载 / 打包下载\n\n'+
+'【常用功能】\n'+
+'• 断点续传：传一半断了，点「续传」接着传，不用重来\n'+
+'• 传文字：验证码 / 地址贴进去，对端秒收\n'+
+'• 局域网发现：下方列出同网段的其他 FileDrop，一键连接\n'+
+'• 回收站：删除先进站，可还原；中断传输在「中断的传输」里清理\n\n'+
+'【快捷键】 Ctrl+K 搜索 · Ctrl+U 上传 · ? 帮助 · Esc 关闭预览\n'+
+'【小技巧】 长按文件卡呼出右键菜单；手机上用底部操作栏；下载文件名前缀在「手机下载位置」里改',
+    sub:'FileDrop v1.0 · 局域网直连 · 不经云端', okText:'开始使用', cancelText:'关闭'});
 }
 document.addEventListener('keydown',(e)=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('searchInput')?.focus();}

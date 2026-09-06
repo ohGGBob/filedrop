@@ -38,7 +38,7 @@ var startTime = time.Now()
 
 // Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘 / 安卓 App。
 // CI 会把这里提取的值注入安卓 gradle 的 versionName——改这里，两边一起变。
-const Version = "1.0.0"
+const Version = "1.0.1"
 
 // Server 是一个 FileDrop 实例。
 type Server struct {
@@ -487,6 +487,11 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) trashDir() string { return filepath.Join(s.Dir(), ".trash") }
 
 func (s *Server) trashHandler(w http.ResponseWriter, r *http.Request) {
+	// 回收站里是被删文件的原始名，同样需要鉴权（2026-09-06 读接口加固）
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
 	out := []map[string]any{}
 	dir := s.trashDir()
 	entries, err := os.ReadDir(dir)
@@ -593,6 +598,11 @@ func (s *Server) trashEmptyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) historyHandler(w http.ResponseWriter, r *http.Request) {
+	// 历史版本列表泄露文件名，需要鉴权（2026-09-06 读接口加固）
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
 	name := safeRelPath(r.URL.Query().Get("name"))
 	if name == "" {
 		jsonErr(w, http.StatusBadRequest, "bad name")

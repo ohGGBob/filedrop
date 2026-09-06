@@ -496,6 +496,11 @@ func (s *Server) partialsHandler(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{"ok": true, "removed": n})
 		return
 	}
+	// GET 列残留同样要鉴权：文件名和大小也算隐私（2026-09-06 读接口加固）
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
 	jsonOK(w, s.scanPartials())
 }
 

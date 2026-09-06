@@ -103,7 +103,8 @@
   .banner{position:sticky;top:62px;z-index:20;margin-bottom:16px;background:linear-gradient(135deg,#fffbeb,#fff7ed);border:1px solid #fde68a;border-left:4px solid var(--warn);border-radius:14px;padding:13px 16px}
   [data-theme="dark"] .banner{background:linear-gradient(135deg,#1c1500,#1f1300);border-color:#92400e}
   #toastWrap{position:fixed;left:0;right:0;bottom:24px;z-index:200;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
-  .toast{max-width:min(86vw,560px);padding:11px 16px;border-radius:12px;font-size:13px;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.22)}
+  .toast{max-width:min(86vw,560px);padding:11px 16px;border-radius:12px;font-size:13px;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.22);opacity:0;transform:translateY(10px);transition:opacity .25s,transform .25s}
+  .toast.show{opacity:1;transform:none}
   .toast.ok{background:var(--ok)}.toast.err{background:var(--err)}.toast.warn{background:var(--warn)}.toast.info{background:var(--brand)}
   .modal-mask{position:fixed;inset:0;z-index:300;background:rgba(2,12,28,.44);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px}
   .modal{background:var(--card);border-radius:18px;max-width:520px;width:100%;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.32)}
@@ -142,7 +143,7 @@
 <header>
   <div class="brand"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="13" x2="12" y2="18"/><polyline points="9 15 12 18 15 15"/></svg></div><div><h1>FileDrop</h1><div class="sub">局域网文件快传 · 精致便携 · 全平台</div></div></div>
   <span class="spacer"></span>
-  <span id="verBadge" class="ver">v1.0.0</span>
+  <span id="verBadge" class="ver">v1.0.1</span>
   <div class="hdr"><button id="langToggle" class="icon-btn" title="Switch language">🌐 EN</button><button id="themeToggle" class="icon-btn" title="切换主题">🌓 主题</button><button id="settingsBtn" class="icon-btn" title="设置">⚙️ 设置</button><button id="aboutBtn" class="icon-btn">关于</button></div>
 </header>
 <div id="dropOverlay">松手即上传 — 支持 4GB+ · 断点续传</div>

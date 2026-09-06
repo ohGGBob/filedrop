@@ -162,6 +162,11 @@ func (s *Server) SetDir(dir string) error {
 
 // settingsHandler 读取 / 修改接收目录。
 func (s *Server) settingsHandler(w http.ResponseWriter, r *http.Request) {
+	// GET 会返回本机接收目录的绝对路径，属于敏感信息，读也要鉴权（2026-09-06）
+	if r.Method != http.MethodPost && !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
 	if r.Method == http.MethodPost {
 		if !s.canWrite(r) {
 			jsonErr(w, http.StatusForbidden, "token required")

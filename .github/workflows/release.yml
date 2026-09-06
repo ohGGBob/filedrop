@@ -102,6 +102,12 @@ jobs:
             BIND_OK=1
           else
             echo "::warning::arm64-only bind 失败，回退全 ABI 构建"
+            # 即使回退成功也把主选失败日志推到 ci-logs，供诊断瘦身问题
+            git config user.name "ci-bot" && git config user.email "ci-bot@users.noreply.github.com"
+            git checkout -B ci-logs
+            git add -f bind.log
+            git commit -m "arm64 bind log for ${GITHUB_SHA}" || true
+            git push -f origin ci-logs || true
             if gomobile bind -target=android -androidapi 26 \
                 -o android/app/libs/filedrop.aar ./mobile 2>&1 | tee bind-fallback.log; then
               BIND_OK=1
@@ -112,11 +118,10 @@ jobs:
             fi
           fi
           if [ "$BIND_OK" != "1" ]; then
-            git config user.name "ci-bot" && git config user.email "ci-bot@users.noreply.github.com"
             git checkout -B ci-logs
             git add -f bind.log bind-fallback.log 2>/dev/null || true
-            git commit -m "bind logs for ${GITHUB_SHA}"
-            git push -f origin ci-logs
+            git commit -m "bind logs for ${GITHUB_SHA}" || true
+            git push -f origin ci-logs || true
             exit 1
           fi
           ls -la android/app/libs/
