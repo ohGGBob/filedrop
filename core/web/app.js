@@ -196,14 +196,26 @@ function renderFiles(){
   const slice=list.slice((curPage-1)*PAGE_SIZE, curPage*PAGE_SIZE);
   const cntEl=$('fileCount'); if(cntEl) cntEl.textContent=total?`共 ${total} 个 · 第 ${curPage}/${pages} 页`:'';
   const pager=$('filePager'); if(pager){pager.style.display=total>PAGE_SIZE?'':'none'; pager.textContent=''; for(let i=1;i<=pages;i++){const b=document.createElement('button');b.textContent=String(i);if(i===curPage)b.className='cur';b.addEventListener('click',()=>{curPage=i;renderFiles()});pager.appendChild(b);} }
-  if(!slice.length){ fileListEl.innerHTML='<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>'+(curSearch?'无匹配结果':'本机还没有可下载的文件')+'</div>'; if(zipSelBtn) zipSelBtn.style.display='none'; return; }
-  let html='<table><thead><tr><th></th><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
+  if(!slice.length){ fileListEl.innerHTML='<div class="empty"><div class="illus">∅</div><div>'+(curSearch?'无匹配结果':'还没有文件 — 拖拽或点击上传')+'</div><div class="hint">支持图片/视频/文档预览，长按卡片可多选</div></div>'; if(zipSelBtn) zipSelBtn.style.display='none'; return; }
+  const vm=$('viewMode')?.value || 'auto';
+  const useCards = vm==='cards' || (vm==='auto' && (window.innerWidth<720 || isIOS));
   const prefix=getPrefix();
-  for(const f of slice){
-    const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
-    html+='<tr><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+  if(useCards){
+    let html='<div class="cards">';
+    for(const f of slice){
+      const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
+      html+='<div class="fcard"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+'</div><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
+    }
+    html+='</div>'; fileListEl.innerHTML=html;
+  } else {
+    let html='<table><thead><tr><th></th><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>';
+    for(const f of slice){
+      const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
+      html+='<tr><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+    }
+    html+='</tbody></table>'; fileListEl.innerHTML=html;
   }
-  html+='</tbody></table>'; fileListEl.innerHTML=html; refreshZipBtn();
+  refreshZipBtn();
 }
 async function loadFiles() {
   try {
@@ -217,6 +229,20 @@ async function loadFiles() {
 }
 $('searchInput')?.addEventListener('input',(e)=>{curSearch=e.target.value;curPage=1;renderFiles()});
 $('sortSelect')?.addEventListener('change',(e)=>{curSort=e.target.value;renderFiles()});
+(function initViewMode(){
+  const sel=$('viewMode'); if(!sel) return;
+  const saved=localStorage.getItem('fd_view');
+  if(saved) sel.value=saved;
+  else if(window.innerWidth<680) sel.value='cards';
+  sel.addEventListener('change',()=>{localStorage.setItem('fd_view',sel.value);renderFiles()});
+})();
+// 全屏拖拽蒙层
+(function initDropOverlay(){
+  const ov=$('dropOverlay'); if(!ov) return;
+  let cnt=0;
+  ['dragenter','dragover'].forEach(ev=> window.addEventListener(ev,(e)=>{ if(e.dataTransfer && [...(e.dataTransfer.types||[])].includes('Files')){e.preventDefault(); cnt++; ov.classList.add('show');}}));
+  ['dragleave','drop'].forEach(ev=> window.addEventListener(ev,(e)=>{ if(e.dataTransfer){cnt=Math.max(0,cnt-1); if(cnt===0) ov.classList.remove('show');}}));
+})();
 
 if (zipSelBtn) {
   zipSelBtn.addEventListener('click', () => {
@@ -239,10 +265,12 @@ function escapeHtml(s) {
 // v0.2：位图断点续传 + 并发分块 + complete 收尾
 // v0.4：队列化。此前每选一次文件就新起一条 Promise 链，两条链同时写同一个进度条
 //       和状态行，数字会来回跳；而且 4GB 的传输一旦开始就停不下来。
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+const isMac = navigator.platform.toUpperCase().indexOf('MAC')>=0;
+const isHarmony = /Harmony|OpenHarmony|HMOS/i.test(navigator.userAgent);
 const isLocal = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
-// 本机回环地址服务默认放行（NoAuth 场景），其余来源必须带令牌或对端授权。
 const canWriteHere = () => !!(token || grant || isLocal);
-const CONC = 3; // 单文件内的分块并发度：3 路大致能压满 5GHz WiFi，再高手机侧反而堵
+const CONC = isIOS ? 1 : 3; // iOS 内存/并发受限，单路更稳
 
 const queueEl = $('upQueue'), summaryEl = $('upSummary');
 const cancelAllBtn = $('cancelAll'), clearDoneBtn = $('clearDone');
@@ -613,6 +641,20 @@ fileListEl.addEventListener('click', async (e) => {
     else toast('重命名失败：' + (j.error || r.status), 'err');
   } else if (a.dataset.act === 'preview') {
     showPreview(name);
+  } else if (a.dataset.act === 'dl' && isIOS) {
+    // iOS 对 download 属性支持弱，改走 blob + share/open 兜底
+    try{
+      const r=await fetch('/api/download?name='+encodeURIComponent(name));
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const blob=await r.blob();
+      const url=URL.createObjectURL(blob);
+      if(navigator.share && navigator.canShare && blob.size < 30*1024*1024){
+        const file=new File([blob], name, {type: blob.type});
+        if(navigator.canShare({files:[file]})) { await navigator.share({files:[file], title:name}); URL.revokeObjectURL(url); return; }
+      }
+      const a2=document.createElement('a'); a2.href=url; a2.download=name; document.body.appendChild(a2); a2.click(); a2.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 8000);
+    }catch(err){ toast('下载失败：'+err,'err'); }
   }
 });
 

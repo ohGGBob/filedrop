@@ -4,232 +4,212 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="color-scheme" content="light dark" />
-<meta name="theme-color" content="#2f6df0" />
+<meta name="theme-color" content="#2563eb" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'><path d='M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/><path d='M14 2v6h6' fill='white'/></svg>" />
-<title>FileDrop · 局域网文件快传</title>
+<title>FileDrop · 局域网文件快传 — 精致版</title>
 <style>
-  :root {
-    --bg: #f6f7f9; --card: #ffffff; --border: #e6e8eb; --text: #0f172a;
-    --muted: #64748b; --muted-2:#94a3b8; --brand: #2563eb; --brand-d: #1d4ed8;
-    --brand-soft:#eff6ff; --ok: #059669; --warn: #d97706; --err: #dc2626;
-    --shadow: 0 1px 2px rgba(15,23,42,.06), 0 8px 24px rgba(15,23,42,.06);
-    --shadow-hover: 0 4px 12px rgba(15,23,42,.08), 0 16px 40px rgba(15,23,42,.10);
-    --radius:16px; --radius-sm:10px;
-  }
-  [data-theme="dark"]{
-    --bg:#0b1220; --card:#121c2e; --border:#1e2d4a; --text:#e2e8f0;
-    --muted:#94a3b8; --muted-2:#64748b; --brand:#3b82f6; --brand-d:#60a5fa;
-    --brand-soft:#1e2d4a; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
-    --shadow-hover: 0 8px 24px rgba(0,0,0,.5);
-  }
-  *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,-apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:14px;line-height:1.65;transition:background .25s,color .25s}
-  /* header */
-  header{position:sticky;top:0;z-index:30;backdrop-filter:saturate(180%) blur(14px);background:color-mix(in srgb,var(--card) 84%,transparent);border-bottom:1px solid var(--border);padding:14px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  :root{--bg:#f5f7fb;--card:#ffffff;--border:#e6e8ef;--text:#0f172a;--muted:#64748b;--muted2:#94a3b8;--brand:#2563eb;--brand2:#7c3aed;--brandD:#1d4ed8;--soft:#eff6ff;--ok:#059669;--warn:#d97706;--err:#dc2626;--shadow:0 1px 2px rgba(15,23,42,.05),0 10px 28px rgba(15,23,42,.07);--shadowH:0 8px 32px rgba(15,23,42,.12);--r:18px;--rs:12px}
+  [data-theme="dark"]{--bg:#070e1f;--card:#0f1c33;--border:#1b2c4f;--text:#e2e8f0;--muted:#94a3b8;--muted2:#64748b;--brand:#3b82f6;--brandD:#60a5fa;--soft:#132447;--shadow:0 8px 28px rgba(0,0,0,.45);--shadowH:0 16px 48px rgba(0,0,0,.6)}
+  *{box-sizing:border-box} html{scroll-behavior:smooth}
+  body{margin:0;background:radial-gradient(1200px 600px at 20% -10%, rgba(37,99,235,.10), transparent 60%), radial-gradient(900px 500px at 90% 0%, rgba(124,58,237,.08), transparent 60%), var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,-apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:14px;line-height:1.65;transition:background .3s,color .3s; -webkit-font-smoothing:antialiased}
+  header{position:sticky;top:0;z-index:30;backdrop-filter:saturate(180%) blur(18px);background:color-mix(in srgb,var(--card) 82%, transparent);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;gap:14px}
   .brand{display:flex;align-items:center;gap:12px}
-  .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--brand),#7c3aed);display:grid;place-items:center;color:#fff;box-shadow:var(--shadow);flex:0 0 auto}
+  .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--brand),var(--brand2));display:grid;place-items:center;color:#fff;box-shadow:var(--shadow);flex:0 0 auto}
   .logo svg{width:20px;height:20px}
-  header h1{font-size:17px;margin:0;font-weight:700;letter-spacing:.2px}
-  header .sub{color:var(--muted);font-size:12.5px;margin-left:2px}
+  .brand h1{margin:0;font-size:16px;font-weight:800;letter-spacing:.2px}
+  .brand .sub{font-size:11.5px;color:var(--muted);letter-spacing:.2px}
   .spacer{flex:1}
-  .hdr-actions{display:flex;gap:8px;align-items:center}
-  .icon-btn{border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:999px;padding:7px 12px;font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:.18s}
+  .hdr{display:flex;gap:8px;align-items:center}
+  .icon-btn{border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:999px;padding:7px 12px;font-size:12px;cursor:pointer;display:inline-flex;gap:6px;align-items:center;transition:.18s}
   .icon-btn:hover{border-color:var(--brand);color:var(--brand);transform:translateY(-1px)}
-  .ver{font-size:11px;color:var(--muted-2);border:1px solid var(--border);padding:3px 8px;border-radius:999px;background:var(--card)}
-  main{max-width:1020px;margin:0 auto;padding:22px 16px 56px}
+  .ver{font-size:11px;color:var(--muted2);border:1px solid var(--border);padding:3px 9px;border-radius:999px;background:var(--card)}
+  main{max-width:1080px;margin:0 auto;padding:18px 16px 64px}
+  .hero{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;margin:10px 0 18px}
+  @media(max-width:900px){.hero{grid-template-columns:1fr}}
+  .hero-card{background:linear-gradient(135deg, color-mix(in srgb,var(--brand) 14%,var(--card)), var(--card));border:1px solid var(--border);border-radius:var(--r);padding:18px 18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .hero-card::after{content:"";position:absolute;right:-30px;top:-30px;width:220px;height:220px;background:radial-gradient(closest-side, rgba(37,99,235,.14), transparent 70%);pointer-events:none}
+  .steps{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+  .step{flex:1 1 140px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:10px 12px;display:flex;gap:10px;align-items:center}
+  .step i{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;background:var(--soft);color:var(--brand);font-style:normal;font-weight:800}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-  @media(max-width:860px){.grid2{grid-template-columns:1fr}}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 18px;box-shadow:var(--shadow);transition:.22s;animation:fadeUp .45s ease both}
-  .card:hover{box-shadow:var(--shadow-hover)}
-  .card h2{font-size:14.5px;margin:0 0 14px;font-weight:700;display:flex;align-items:center;gap:8px}
-  .card h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 6px color-mix(in srgb,var(--brand) 14%,transparent)}
-  .addr{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--brand-soft);border:1px solid color-mix(in srgb,var(--brand) 14%,transparent);border-radius:12px;padding:11px 12px;word-break:break-all}
-  .addr code{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--brand-d);font-size:13px}
-  button{border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:10px;padding:8px 14px;font-size:13px;cursor:pointer;transition:.18s}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:18px;box-shadow:var(--shadow);transition:.22s;animation:fadeUp .5s ease both}
+  .card:hover{box-shadow:var(--shadowH)}
+  .card h2{font-size:14.5px;margin:0 0 12px;font-weight:750;display:flex;align-items:center;gap:8px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 6px color-mix(in srgb,var(--brand) 14%,transparent)}
+  .addr{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--soft);border:1px solid color-mix(in srgb,var(--brand) 14%,transparent);border-radius:12px;padding:11px 12px;word-break:break-all}
+  .addr code{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--brandD);font-size:13px}
+  button{border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:10px;padding:8px 13px;font-size:13px;cursor:pointer;transition:.18s}
   button:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
-  button.primary{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 6px 18px color-mix(in srgb,var(--brand) 30%,transparent)}
-  button.primary:hover{background:var(--brand-d)}
-  button:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+  button.primary{background:linear-gradient(135deg,var(--brand),var(--brand2));border-color:transparent;color:#fff;box-shadow:0 8px 20px color-mix(in srgb,var(--brand) 28%,transparent)}
+  button:disabled{opacity:.5;transform:none;box-shadow:none}
   .hint{color:var(--muted);font-size:12px;margin-top:8px;line-height:1.6}
-  a.dl{color:var(--brand);text-decoration:none;font-weight:600}
+  a.dl{color:var(--brand);text-decoration:none;font-weight:650}
   a.dl:hover{text-decoration:underline}
-  .drop{border:2px dashed var(--border);border-radius:14px;padding:28px 16px;text-align:center;color:var(--muted);cursor:pointer;transition:.18s;background:linear-gradient(180deg,color-mix(in srgb,var(--card) 100%,transparent),color-mix(in srgb,var(--brand-soft) 55%,transparent))}
-  .drop:hover{border-color:var(--brand);background:var(--brand-soft)}
-  .drop.over{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-d);transform:scale(1.01)}
-  .drop svg{width:28px;height:28px;margin-bottom:8px;opacity:.9}
+  .drop{border:2px dashed var(--border);border-radius:16px;padding:30px 16px;text-align:center;color:var(--muted);cursor:pointer;transition:.18s;background:linear-gradient(180deg, var(--card), color-mix(in srgb,var(--soft) 70%, transparent))}
+  .drop:hover{border-color:var(--brand);background:var(--soft)}
+  .drop.over{border-color:var(--brand);background:var(--soft);color:var(--brandD);transform:scale(1.01)}
+  .drop svg{width:30px;height:30px;margin-bottom:8px}
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .progress{height:8px;background:color-mix(in srgb,var(--border) 80%,transparent);border-radius:999px;overflow:hidden;margin-top:10px}
-  .progress>span{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--brand),#7c3aed);transition:width .25s;position:relative;overflow:hidden}
-  .progress>span::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);animation:shimmer 1.2s infinite}
+  .progress{height:8px;background:color-mix(in srgb,var(--border) 80%, transparent);border-radius:999px;overflow:hidden;margin-top:10px}
+  .progress>span{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--brand),var(--brand2));transition:width .25s;position:relative;overflow:hidden}
+  .progress>span::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.32),transparent);animation:shimmer 1.1s infinite}
   .meta{color:var(--muted);font-size:12px;margin-top:6px}
-  /* file list table -> card list on mobile */
   .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-  .toolbar input, .toolbar select{border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:10px;padding:7px 10px;font-size:13px;outline:none}
-  .toolbar input:focus,.toolbar select:focus{border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 15%,transparent)}
+  .toolbar input,.toolbar select{border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:10px;padding:7px 10px;font-size:13px;outline:none}
+  .toolbar input:focus,.toolbar select:focus{border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 14%,transparent)}
   table{width:100%;border-collapse:collapse}
   th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border);font-size:13px}
-  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.3px;text-transform:uppercase}
+  th{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.3px;text-transform:uppercase}
   td.size{color:var(--muted);font-variant-numeric:tabular-nums}
-  .file-actions{display:flex;gap:6px;flex-wrap:wrap}
-  .chip{font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid var(--border);background:var(--card);color:var(--muted)}
-  .empty{color:var(--muted);padding:18px 6px;display:grid;place-items:center;text-align:center;gap:10px}
-  .empty svg{width:52px;height:52px;opacity:.7}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+  .fcard{border:1px solid var(--border);border-radius:14px;padding:12px;background:var(--card);display:flex;flex-direction:column;gap:8px;transition:.18s}
+  .fcard:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+  .fcard .top{display:flex;gap:10px;align-items:center}
+  .fico{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--soft);font-size:16px}
+  .fname{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .fmeta{font-size:12px;color:var(--muted)}
+  .empty{color:var(--muted);padding:22px 6px;display:grid;place-items:center;text-align:center;gap:10px}
+  .empty .illus{width:120px;height:90px;border-radius:16px;background:linear-gradient(135deg, var(--soft), color-mix(in srgb,var(--soft) 60%, transparent));border:1px dashed var(--border);display:grid;place-items:center}
   .queue{margin-top:12px;display:flex;flex-direction:column;gap:9px}
   .qrow{border:1px solid var(--border);border-radius:12px;padding:10px 11px;background:var(--card);transition:.18s}
-  .qrow.active{border-color:color-mix(in srgb,var(--brand) 30%,transparent);background:color-mix(in srgb,var(--brand-soft) 70%,transparent)}
-  .qhead{display:flex;align-items:baseline;gap:8px}
-  .qname{flex:1 1 auto;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
-  .qsize{flex:0 0 auto;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .qrow.active{border-color:color-mix(in srgb,var(--brand) 28%,transparent);background:color-mix(in srgb,var(--soft) 72%, transparent)}
+  .qhead{display:flex;gap:8px;align-items:baseline}
+  .qname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:13px}
+  .qsize{color:var(--muted);font-size:12px}
   .qbar{height:6px;background:color-mix(in srgb,var(--border) 80%,transparent);border-radius:999px;overflow:hidden;margin-top:7px}
   .qbar>span{display:block;height:100%;width:0%;background:var(--brand);transition:width .2s}
-  .qrow.done .qbar>span{background:var(--ok)}
-  .qrow.err .qbar>span{background:var(--err)}
-  .qstat{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:12px;color:var(--muted)}
-  .qstat>.spacer{flex:1 1 auto}
-  .qact{border:none;background:none;padding:0;font-size:12px;color:var(--brand);cursor:pointer;font-weight:600}
+  .qrow.done .qbar>span{background:var(--ok)} .qrow.err .qbar>span{background:var(--err)}
+  .qstat{display:flex;gap:8px;align-items:center;margin-top:5px;font-size:12px;color:var(--muted)}
+  .qstat .spacer{flex:1}
+  .qact{border:none;background:none;padding:0;font-size:12px;color:var(--brand);cursor:pointer;font-weight:650}
   .qact.danger{color:var(--err)}
-  textarea{width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:12px;font:inherit;font-size:13px;resize:vertical;color:var(--text);background:var(--card);transition:.18s}
+  textarea{width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:12px;font:inherit;font-size:13px;resize:vertical;background:var(--card);color:var(--text)}
   textarea:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 14%,transparent)}
-  .notes{margin-top:12px;display:flex;flex-direction:column;gap:9px}
+  .notes{display:flex;flex-direction:column;gap:9px;margin-top:10px}
   .note{border:1px solid var(--border);border-radius:12px;padding:10px 11px;background:var(--card)}
-  .nhead{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--muted)}
-  .nhead>.spacer{flex:1 1 auto}
-  .nbody{margin:7px 0 0;padding:9px 10px;background:var(--bg);border-radius:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:240px;overflow:auto;border:1px solid var(--border)}
-  .nact{border:none;background:none;padding:0;font-size:12px;color:var(--brand);cursor:pointer;font-weight:600}
+  .nhead{display:flex;gap:8px;align-items:baseline;font-size:12px;color:var(--muted)}
+  .nhead .spacer{flex:1}
+  .nbody{margin:7px 0 0;padding:9px 10px;background:var(--bg);border-radius:10px;border:1px solid var(--border);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:240px;overflow:auto}
+  .nact{border:none;background:none;padding:0;font-size:12px;color:var(--brand);cursor:pointer;font-weight:650}
   .nact.danger{color:var(--err)}
-  .peers{margin-top:12px;display:flex;flex-direction:column;gap:9px}
-  .peer{border:1px solid var(--border);border-radius:12px;padding:10px 11px;background:var(--card);transition:.18s}
+  .peers{display:flex;flex-direction:column;gap:9px}
+  .peer{border:1px solid var(--border);border-radius:12px;padding:11px;background:var(--card);transition:.18s}
   .peer:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
-  .phead{display:flex;align-items:center;gap:8px;font-size:13px;flex-wrap:wrap}
-  .phead>b{font-weight:700}
-  .phead>.spacer{flex:1 1 auto}
-  .banner{position:sticky;top:64px;z-index:20;margin-bottom:18px;background:linear-gradient(135deg,#fffbeb,#fff7ed);border:1px solid #fde68a;border-left:4px solid var(--warn);border-radius:14px;padding:13px 16px;animation:slideDown .35s ease}
+  .phead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+  .phead b{font-weight:750}
+  .phead .spacer{flex:1}
+  .banner{position:sticky;top:62px;z-index:20;margin-bottom:16px;background:linear-gradient(135deg,#fffbeb,#fff7ed);border:1px solid #fde68a;border-left:4px solid var(--warn);border-radius:14px;padding:13px 16px}
   [data-theme="dark"] .banner{background:linear-gradient(135deg,#1c1500,#1f1300);border-color:#92400e}
-  .banner .btitle{font-weight:700;margin-bottom:8px}
-  .arow{display:flex;align-items:center;gap:10px;font-size:13px;flex-wrap:wrap}
-  .arow>span{flex:1 1 auto;min-width:0}
   #toastWrap{position:fixed;left:0;right:0;bottom:24px;z-index:200;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
-  .toast{max-width:min(86vw,560px);padding:11px 16px;border-radius:12px;font-size:13px;line-height:1.5;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.22);word-break:break-word}
-  .toast.ok{background:#059669}.toast.err{background:#dc2626}.toast.warn{background:#d97706}.toast.info{background:#2563eb}
-  .toast.show{animation:toastIn .2s ease-out,toastOut .28s ease-in 1.1s forwards}
-  .modal-mask{position:fixed;inset:0;z-index:300;background:rgba(2,12,28,.44);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .18s ease}
-  .modal{background:var(--card);border-radius:18px;max-width:480px;width:100%;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.28);animation:pop .22s ease}
-  .modal h3{margin:0 0 8px;font-size:16px;font-weight:750}
-  .modal p{margin:0 0 6px;font-size:13px;color:var(--text)}
-  .modal .msub{color:var(--muted);font-size:12px;margin-bottom:16px}
-  .modal .mact{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
-  .modal input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--card);color:var(--text)}
-  .modal input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 14%,transparent)}
-  .pagination{display:flex;gap:6px;align-items:center;justify-content:center;margin-top:10px}
+  .toast{max-width:min(86vw,560px);padding:11px 16px;border-radius:12px;font-size:13px;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.22)}
+  .toast.ok{background:var(--ok)}.toast.err{background:var(--err)}.toast.warn{background:var(--warn)}.toast.info{background:var(--brand)}
+  .modal-mask{position:fixed;inset:0;z-index:300;background:rgba(2,12,28,.44);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px}
+  .modal{background:var(--card);border-radius:18px;max-width:520px;width:100%;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.32)}
+  .modal h3{margin:0 0 8px;font-size:16px;font-weight:800}
+  .modal .mact{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+  .modal input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)}
+  .pagination{display:flex;gap:6px;justify-content:center;margin-top:10px}
   .pagination button{padding:6px 10px;font-size:12px}
   .pagination .cur{background:var(--brand);color:#fff;border-color:var(--brand)}
-  footer{max-width:1020px;margin:10px auto 0;padding:18px 16px;color:var(--muted);font-size:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;border-top:1px dashed var(--border)}
+  /* fullscreen drop overlay */
+  #dropOverlay{position:fixed;inset:0;z-index:250;background:rgba(37,99,235,.08);backdrop-filter:blur(6px);border:3px dashed var(--brand);margin:12px;border-radius:20px;display:none;place-items:center;color:var(--brandD);font-weight:700;font-size:18px}
+  #dropOverlay.show{display:grid}
+  .skeleton{height:12px;background:linear-gradient(90deg, var(--border), color-mix(in srgb,var(--border) 60%, transparent), var(--border));background-size:200% 100%;animation:skeleton 1.1s infinite;border-radius:999px}
+  footer{max-width:1080px;margin:10px auto 0;padding:18px 16px;color:var(--muted);font-size:12px;display:flex;gap:10px;flex-wrap:wrap;justify-content:space-between;border-top:1px dashed var(--border)}
   @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
-  @keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  @keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
-  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
-  @keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+  @keyframes skeleton{0%{background-position:200% 0}100%{background-position:-200% 0}}
 </style>
 </head>
 <body>
 <header>
-  <div class="brand">
-    <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="13" x2="12" y2="18"/><polyline points="9 15 12 18 15 15"/></svg></div>
-    <div><h1>FileDrop</h1><div class="sub">局域网文件快传 · 零安装 · 4GB+ 断点续传</div></div>
-  </div>
+  <div class="brand"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="13" x2="12" y2="18"/><polyline points="9 15 12 18 15 15"/></svg></div><div><h1>FileDrop</h1><div class="sub">局域网文件快传 · 精致便携 · 全平台</div></div></div>
   <span class="spacer"></span>
-  <span id="verBadge" class="ver">v0.7.0</span>
-  <div class="hdr-actions">
-    <button id="themeToggle" class="icon-btn" title="切换深浅色">🌓 主题</button>
-    <button id="aboutBtn" class="icon-btn">关于</button>
-  </div>
+  <span id="verBadge" class="ver">v1.0.0</span>
+  <div class="hdr"><button id="themeToggle" class="icon-btn" title="切换主题">🌓 主题</button><button id="aboutBtn" class="icon-btn">关于</button></div>
 </header>
+<div id="dropOverlay">松手即上传 — 支持 4GB+ · 断点续传</div>
 <main>
   <div id="toastWrap" aria-live="polite"></div>
-  <section class="banner" id="peerAsk" hidden><div class="btitle">有设备想给你传文件</div><div id="peerAskList"></div></section>
+  <section class="banner" id="peerAsk" hidden><div style="font-weight:800;margin-bottom:8px">有设备想给你传文件</div><div id="peerAskList"></div></section>
 
-  <section class="card" style="animation-delay:.02s">
-    <h2><span class="dot"></span>本机连接地址 <span style="margin-left:auto;font-weight:500;font-size:12px;color:var(--muted)" id="connHint">扫码即连</span></h2>
-    <div class="addr"><code id="addr">检测中…</code><button id="copyAddr">复制</button><button id="refreshInfo" title="刷新地址">刷新</button></div>
-    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:12px">
-      <img id="qr" alt="扫码连接" style="display:none;width:184px;height:184px;border:1px solid var(--border);border-radius:12px;background:#fff;padding:6px" />
-      <div class="hint" style="flex:1;min-width:220px">手机/平板用系统相机或浏览器扫码，直达含令牌的上传页。令牌仅本机有效，隔壁工位扫到也传不进来（除非你批准临时授权）。</div>
+  <section class="hero">
+    <div class="hero-card">
+      <div style="font-weight:800;font-size:15px">1 秒连 · 随手传 · 不经云</div>
+      <div class="hint">同一 WiFi 下，扫码即连。8MiB 分块·断点续传·SHA256 校验，4GB 大文件也稳。</div>
+      <div class="steps">
+        <div class="step"><i>1</i><div><b>本机开 FileDrop</b><div class="hint" style="margin:0">双击 exe / 打开 App</div></div></div>
+        <div class="step"><i>2</i><div><b>扫码直达</b><div class="hint" style="margin:0">二维码含令牌·免输地址</div></div></div>
+        <div class="step"><i>3</i><div><b>拖拽即传</b><div class="hint" style="margin:0">断点续传·自动校验</div></div></div>
+      </div>
+    </div>
+    <div class="hero-card">
+      <div style="font-weight:750">本机连接地址</div>
+      <div class="addr" style="margin-top:8px"><code id="addr">检测中…</code><button id="copyAddr">复制</button><button id="refreshInfo">刷新</button></div>
+      <div style="display:flex;gap:12px;align-items:center;margin-top:10px;flex-wrap:wrap"><img id="qr" alt="扫码连接" style="display:none;width:160px;height:160px;border:1px solid var(--border);border-radius:12px;background:#fff;padding:6px" /><div class="hint" style="flex:1;min-width:160px">令牌仅本机有效，隔壁工位扫到也传不进来。<br/>跨平台：Windows · macOS · iOS · Android · 鸿蒙</div></div>
     </div>
   </section>
 
-  <section class="card" style="animation-delay:.06s">
-    <h2><span class="dot" style="background:var(--ok)"></span>接收目录（电脑端）</h2>
+  <section class="card">
+    <h2><span class="dot" style="background:var(--ok)"></span>接收目录</h2>
     <div class="addr"><code id="recvDir">读取中…</code><button id="openFolder">打开文件夹</button></div>
-    <div class="row" style="margin-top:10px">
-      <input id="dirInput" type="text" placeholder="例如 D:\FileDrop" style="flex:1 1 280px;min-width:220px;padding:9px 12px;border:1px solid var(--border);border-radius:10px;font-size:13px;background:var(--card);color:var(--text)" />
-      <button id="pickFolder">浏览…</button><button id="saveDir" class="primary">保存并切换</button>
-    </div>
-    <div class="hint">切换后立即生效并写入 <code>filedrop-config.json</code>，重启仍记住。有未完成的 .part 时会拒绝切换，避免孤儿文件。</div>
+    <div class="row" style="margin-top:10px"><input id="dirInput" type="text" placeholder="例如 D:\FileDrop 或 /Users/you/FileDrop" style="flex:1 1 280px;min-width:220px;padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)" /><button id="pickFolder">浏览…</button><button id="saveDir" class="primary">保存并切换</button></div>
+    <div class="hint">切换即生效并写入 <code>filedrop-config.json</code>。有未完成 .part 时拒绝切换，避免孤儿文件。</div>
   </section>
 
-  <section class="card" style="animation-delay:.08s">
+  <section class="card">
     <h2>手机下载位置</h2>
-    <div class="row"><span style="font-size:13px">下载文件名前缀</span><input id="prefixInput" type="text" style="width:190px;padding:8px 12px;border:1px solid var(--border);border-radius:10px;font-size:13px;background:var(--card);color:var(--text)" /></div>
-    <div class="hint">安卓下载目录由浏览器决定：Chrome → 设置 → 下载内容 → 下载位置。加前缀便于在“下载/FileDrop”中一眼识别。</div>
+    <div class="row"><span style="font-size:13px">下载前缀</span><input id="prefixInput" type="text" style="width:190px;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)" /><span class="hint" id="prefixHint">在下载目录中一眼识别</span></div>
+    <div class="hint">安卓/鸿蒙：浏览器决定目录；iOS：走系统分享/文件 App。请在 Chrome/ Safari → 下载位置 指定 FileDrop 文件夹。</div>
   </section>
 
   <div class="grid2">
-    <section class="card" style="animation-delay:.1s">
+    <section class="card">
       <h2><span class="dot"></span>发送（上传到本机）</h2>
-      <div id="drop" class="drop"><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>点击选择文件（可多选），或把文件拖到这里<br/><span class="hint">支持 4GB+ · 自动分块 8MiB · 断点续传 · 文件夹保留结构</span></div>
-      <input id="file" type="file" multiple hidden />
-      <input id="folder" type="file" multiple webkitdirectory hidden />
-      <div class="row" style="margin-top:10px"><button id="pickFolderBtn" style="display:none">选择文件夹上传</button><span class="hint" id="folderHint" style="display:none">桌面浏览器支持文件夹整包上传</span></div>
-      <div class="progress"><span id="upBar"></span></div>
-      <div id="upSummary" class="meta"></div>
+      <div id="drop" class="drop"><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>点击选文件（可多选）或拖拽到此<br/><span class="hint">支持 4GB+ · 8MiB 分块 · 断点续传 · 文件夹保留结构</span></div>
+      <input id="file" type="file" multiple hidden /><input id="folder" type="file" multiple webkitdirectory hidden />
+      <div class="row" style="margin-top:8px"><button id="pickFolderBtn" style="display:none">选择文件夹上传</button><span class="hint" id="folderHint" style="display:none">桌面端支持文件夹整包</span></div>
+      <div class="progress"><span id="upBar"></span></div><div id="upSummary" class="meta"></div>
       <div id="upQueue" class="queue"></div>
-      <div class="row" style="margin-top:10px"><button id="cancelAll" style="display:none">全部取消</button><button id="clearDone" style="display:none">清除已完成</button></div>
+      <div class="row" style="margin-top:8px"><button id="cancelAll" style="display:none">全部取消</button><button id="clearDone" style="display:none">清除已完成</button></div>
       <div id="upStatus" class="meta"></div>
     </section>
 
-    <section class="card" style="animation-delay:.14s">
-      <h2><span class="dot" style="background:#7c3aed"></span>接收（从本机下载） <span style="margin-left:auto;display:flex;gap:6px"><button id="zipSel" style="display:none">打包下载所选</button><button id="refreshFiles">刷新</button></span></h2>
-      <div class="toolbar">
-        <input id="searchInput" type="search" placeholder="搜索文件名…" style="flex:1 1 160px" />
-        <select id="sortSelect" title="排序"><option value="mtime_desc">最新在前</option><option value="mtime_asc">最旧在前</option><option value="name_asc">名称 A-Z</option><option value="size_desc">体积大→小</option><option value="size_asc">体积小→大</option></select>
-      </div>
-      <div id="fileList"><div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>加载中…</div></div>
-      <div id="filePager" class="pagination" style="display:none"></div>
-      <div class="hint" id="fileCount"></div>
+    <section class="card">
+      <h2><span class="dot" style="background:var(--brand2)"></span>接收（从本机下载） <span style="margin-left:auto;display:flex;gap:6px"><button id="zipSel" style="display:none">打包下载</button><button id="refreshFiles">刷新</button></span></h2>
+      <div class="toolbar"><input id="searchInput" type="search" placeholder="搜索文件名…" style="flex:1 1 160px" /><select id="sortSelect"><option value="mtime_desc">最新在前</option><option value="mtime_asc">最旧在前</option><option value="name_asc">名称 A-Z</option><option value="size_desc">大→小</option><option value="size_asc">小→大</option></select><select id="viewMode"><option value="auto">自动视图</option><option value="table">表格</option><option value="cards">卡片</option></select></div>
+      <div id="fileList"><div class="skeleton" style="height:16px;width:60%"></div><div class="skeleton" style="height:12px;width:90%;margin-top:8px"></div><div class="skeleton" style="height:12px;width:80%;margin-top:8px"></div></div>
+      <div id="filePager" class="pagination" style="display:none"></div><div class="hint" id="fileCount"></div>
     </section>
   </div>
 
-  <section class="card" style="animation-delay:.16s">
+  <section class="card">
     <h2><span class="dot" style="background:var(--warn)"></span>传文字（剪贴板快传）</h2>
-    <textarea id="noteInput" rows="3" placeholder="粘一段验证码 / 命令 / 地址过来，对面一键复制"></textarea>
+    <textarea id="noteInput" rows="3" placeholder="验证码 / 命令 / 地址，粘贴即达"></textarea>
     <div class="row" style="margin-top:8px"><button id="noteSend" class="primary">发送</button><span id="noteStatus" class="meta"></span><span class="spacer"></span><span class="hint">Ctrl+Enter 发送</span></div>
     <div id="noteList" class="notes"></div>
-    <div class="hint">便签存于 <code>filedrop-notes.json</code>，读写均需令牌，最多 200 条/8MiB，正文用 textContent 渲染防 XSS。</div>
+    <div class="hint">存于 <code>filedrop-notes.json</code>，读写均需令牌，最多 200 条/8MiB。</div>
   </section>
 
-  <section class="card" style="animation-delay:.18s">
+  <section class="card">
     <h2><span class="dot" style="background:#06b6d4"></span>局域网里的其他 FileDrop</h2>
     <div id="peerSelf" class="meta"></div>
     <div id="peerAskInline" class="hint" style="display:none">本页无写权限，无法看到待批准请求。请用 <code>http://127.0.0.1:端口</code> 或带令牌地址打开。</div>
-    <div class="row" style="margin-top:10px"><input id="peerAddr" type="text" placeholder="手动添加：192.168.1.20:28080" style="flex:1 1 240px;min-width:200px;padding:8px 12px;border:1px solid var(--border);border-radius:10px;font-size:13px;background:var(--card);color:var(--text)" /><button id="peerAdd">添加</button></div>
-    <div id="peerList" class="peers"><div class="empty">扫描中…</div></div>
-    <div id="peerStatus" class="meta"></div>
+    <div class="row" style="margin-top:8px"><input id="peerAddr" type="text" placeholder="手动添加：192.168.1.20:28080" style="flex:1 1 240px;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)" /><button id="peerAdd">添加</button></div>
+    <div id="peerList" class="peers"><div class="empty">扫描中…</div></div><div id="peerStatus" class="meta"></div>
   </section>
 
-  <section class="card" id="partialCard" style="animation-delay:.20s">
+  <section class="card" id="partialCard">
     <h2>中断的传输 <button id="purgeAll" style="float:right">全部清理</button></h2>
-    <div id="partialList"><div class="empty">加载中…</div></div>
-    <div class="hint">未传完的临时数据（.part）可能占数 GB，已完成文件不受影响。</div>
+    <div id="partialList"><div class="empty"><div class="illus">◍</div>加载中…</div></div>
+    <div class="hint">未传完的 .part 可能占数 GB，已完成文件不受影响。</div>
   </section>
 
-  <footer><span>FileDrop · 局域网文件快传 · 精致便携版</span><span id="footVer">—</span></footer>
+  <footer><span>FileDrop · 局域网文件快传 · 精致便携版</span><span>Windows · macOS · iOS · Android · HarmonyOS</span><span id="footVer">—</span></footer>
 </main>
-<!-- Preview Modal -->
-<div id="previewMask" class="modal-mask" style="display:none"><div class="modal" style="max-width:720px"><h3 id="previewTitle">预览</h3><div id="previewBody" style="margin-top:10px;max-height:60vh;overflow:auto"></div><div class="mact" style="margin-top:14px"><button id="previewClose">关闭</button></div></div></div>
+<div id="previewMask" class="modal-mask" style="display:none"><div class="modal" style="max-width:760px"><h3 id="previewTitle">预览</h3><div id="previewBody" style="margin-top:10px;max-height:62vh;overflow:auto"></div><div class="mact" style="margin-top:14px"><button id="previewClose">关闭</button></div></div></div>
 <script src="app.js"></script>
 </body>
 </html>
