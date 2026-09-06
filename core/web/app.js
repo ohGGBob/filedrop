@@ -846,6 +846,11 @@ function inputModal(title, body, defVal){
 const noteInput = $('noteInput'), noteList = $('noteList'), noteStatus = $('noteStatus');
 const noteSendBtn = $('noteSend');
 let notes = [];
+const NOTE_PIN_KEY='fd_notes_pin';
+let curNoteSearch='';
+function getPinned(){ try{ return new Set(JSON.parse(localStorage.getItem(NOTE_PIN_KEY)||'[]')); }catch(_){ return new Set(); } }
+function isPinned(id){ return getPinned().has(id); }
+function togglePin(id){ const s=getPinned(); if(s.has(id)) s.delete(id); else s.add(id); localStorage.setItem(NOTE_PIN_KEY, JSON.stringify([...s])); renderNotes(); }
 
 function setNoteStatus(t) { if (noteStatus) noteStatus.textContent = t; }
 
@@ -860,16 +865,21 @@ function fmtWhen(ms) {
 function renderNotes() {
   if (!noteList) return;
   noteList.textContent = '';
-  if (!notes.length) {
+  let list=[...notes];
+  if(curNoteSearch){ const k=curNoteSearch.toLowerCase(); list=list.filter(n=>n.text.toLowerCase().includes(k)); }
+  const pinned=getPinned();
+  list.sort((a,b)=>{ const pa=pinned.has(a.id)?0:1, pb=pinned.has(b.id)?0:1; if(pa!==pb) return pa-pb; return b.at-a.at; });
+  if (!list.length) {
     const e = document.createElement('div');
     e.className = 'empty';
-    e.textContent = '还没有便签';
+    e.textContent = curNoteSearch?'无匹配便签':'还没有便签';
     noteList.appendChild(e);
     return;
   }
-  for (const n of notes) {
-    const box = document.createElement('div'); box.className = 'note';
+  for (const n of list) {
+    const box = document.createElement('div'); box.className = 'note'; if(pinned.has(n.id)) box.style.borderColor='var(--warn)';
     const head = document.createElement('div'); head.className = 'nhead';
+    const pin = document.createElement('button'); pin.className='nact'; pin.textContent=pinned.has(n.id)?'📌 已置顶':'📍 置顶'; pin.addEventListener('click',()=>togglePin(n.id));
     const when = document.createElement('span'); when.textContent = fmtWhen(n.at);
     const size = document.createElement('span'); size.textContent = (n.size || n.text.length) + ' 字节 · ' + n.text.split('\n').length + ' 行';
     const spacer = document.createElement('span'); spacer.className = 'spacer';
@@ -881,7 +891,7 @@ function renderNotes() {
     });
     const del = document.createElement('button'); del.className = 'nact danger'; del.textContent = '删除';
     del.addEventListener('click', () => deleteNote(n.id));
-    head.append(when, size, spacer, copy, del);
+    head.append(pin, when, size, spacer, copy, del);
     const body = document.createElement('pre'); body.className = 'nbody'; body.textContent = n.text;
     box.append(head, body);
     noteList.appendChild(box);
@@ -949,6 +959,15 @@ if (noteSendBtn) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendNote(); }
   });
 }
+$('noteSearch')?.addEventListener('input', e=>{ curNoteSearch=e.target.value; renderNotes(); });
+$('noteExport')?.addEventListener('click', ()=>{
+  const blob=new Blob([JSON.stringify(notes, null, 2)], {type:'application/json'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='filedrop-notes.json'; a.click(); URL.revokeObjectURL(url);
+});
+$('noteCopyAll')?.addEventListener('click', async()=>{
+  const txt=notes.map(n=>n.text).join('\n\n---\n\n');
+  const ok=await copyText(txt); toast(ok?'已复制全部':'复制失败','info');
+});
 
 // ---- 局域网里的其他 FileDrop：发现 · 请求上传 · 批准对方 ----
 // 广播信标里不带配对令牌，所以「发现到」不等于「能上传」。路径是：

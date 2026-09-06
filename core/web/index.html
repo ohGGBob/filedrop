@@ -216,6 +216,7 @@
     <h2><span class="dot" style="background:var(--warn)"></span>传文字（剪贴板快传）</h2>
     <textarea id="noteInput" rows="3" placeholder="验证码 / 命令 / 地址，粘贴即达"></textarea>
     <div class="row" style="margin-top:8px"><button id="noteSend" class="primary">发送</button><span id="noteStatus" class="meta"></span><span class="spacer"></span><span class="hint">Ctrl+Enter 发送</span></div>
+    <div class="row" style="margin-top:8px"><input id="noteSearch" type="search" placeholder="搜索便签…" style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)" /><button id="noteExport">导出</button><button id="noteCopyAll">复制全部</button></div>
     <div id="noteList" class="notes"></div>
     <div class="hint">存于 <code>filedrop-notes.json</code>，读写均需令牌，最多 200 条/8MiB。</div>
   </section>
