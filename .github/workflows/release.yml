@@ -97,7 +97,8 @@ jobs:
           gomobile init
           mkdir -p android/app/libs
           BIND_OK=0
-          if gomobile bind -target=android -androidapi 26 -abi arm64 \
+          # 瘦身：pinned gomobile 没有 -abi flag，架构要写进 target（-target=android/arm64）
+          if gomobile bind -target=android/arm64 -androidapi 26 \
               -o android/app/libs/filedrop.aar ./mobile 2>&1 | tee bind.log; then
             BIND_OK=1
           else

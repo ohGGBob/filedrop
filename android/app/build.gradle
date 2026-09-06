@@ -9,8 +9,8 @@ android {
 
     // 版本由 CI 从 core/server.go 的 Version 常量提取后注入（-PversionName=），
     // versionCode 用 git 提交数，保证单调递增。本地无参数时用兜底值。
-    def vName = project.findProperty('versionName') ?: '1.0.1'
-    def vCode = (project.findProperty('versionCode') ?: '13').toInteger()
+    def vName = project.findProperty('versionName') ?: '1.0.2'
+    def vCode = (project.findProperty('versionCode') ?: '14').toInteger()
 
     defaultConfig {
         applicationId "com.ohggbob.filedrop"
