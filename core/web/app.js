@@ -196,10 +196,12 @@ function selectedNames() {
 function refreshZipBtn() {
   if (!zipSelBtn) return;
   zipSelBtn.style.display = selectedNames().length ? '' : 'none';
+  updateSelCount();
 }
 
-let allFiles=[], curSearch='', curSort='mtime_desc', curPage=1; const PAGE_SIZE=20;
+let allFiles=[], curSearch='', curSort='mtime_desc', curType='', curPage=1; const PAGE_SIZE=20;
 function fileIcon(name){const ext=(name.split('.').pop()||'').toLowerCase();const map={jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',mp4:'🎬',mov:'🎬',avi:'🎬',mkv:'🎬',mp3:'🎵',wav:'🎵',pdf:'📄',zip:'🗜️',rar:'🗜️',docx:'📝',xlsx:'📊',pptx:'📊',txt:'📃'};return map[ext]||'📦'}
+function fileType(name){const ext=(name.split('.').pop()||'').toLowerCase(); if(['jpg','jpeg','png','gif','webp','heic','bmp','svg'].includes(ext)) return 'image'; if(['mp4','mov','avi','mkv','webm','m4v'].includes(ext)) return 'video'; if(['mp3','wav','aac','flac','ogg','m4a'].includes(ext)) return 'audio'; if(['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','md','csv','json','html'].includes(ext)) return 'doc'; if(['zip','rar','7z','tar','gz','bz2'].includes(ext)) return 'archive'; return 'other';}
 function isPreviewable(name){return /\.(jpg|jpeg|png|gif|webp|txt|md|log|json|csv|html|pdf|mp4|mp3)$/i.test(name)}
 function showPreview(name){
   const mask=$('previewMask'), body=$('previewBody'), title=$('previewTitle');
@@ -210,9 +212,11 @@ function showPreview(name){
   else if(/\.pdf$/i.test(name)){body.innerHTML='<iframe src="'+url+'" style="width:100%;height:55vh;border:1px solid var(--border);border-radius:10px"></iframe>';}
   else { fetch(url).then(r=>r.text()).then(t=>{body.innerHTML='<pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:10px;border-radius:10px;border:1px solid var(--border);max-height:55vh;overflow:auto">'+escapeHtml(t.slice(0,200000))+'</pre>'}).catch(()=>body.textContent='预览失败');}
 }
+function updateSelCount(){ const c=selectedNames().length; const el=$('selCount'); if(el) el.textContent=c?`已选 ${c} 项`:''; }
 function renderFiles(){
   let list=[...allFiles];
   if(curSearch) {const k=curSearch.toLowerCase(); list=list.filter(f=>f.name.toLowerCase().includes(k));}
+  if(curType) list=list.filter(f=>fileType(f.name)===curType);
   if(curSort==='name_asc') list.sort((a,b)=>a.name.localeCompare(b.name));
   else if(curSort==='size_desc') list.sort((a,b)=>b.size-a.size);
   else if(curSort==='size_asc') list.sort((a,b)=>a.size-b.size);
@@ -255,6 +259,15 @@ async function loadFiles() {
 }
 $('searchInput')?.addEventListener('input',(e)=>{curSearch=e.target.value;curPage=1;renderFiles()});
 $('sortSelect')?.addEventListener('change',(e)=>{curSort=e.target.value;renderFiles()});
+$('typeFilter')?.addEventListener('change',(e)=>{curType=e.target.value;curPage=1;renderFiles()});
+$('selAll')?.addEventListener('click',()=>{fileListEl.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=true);refreshZipBtn();updateSelCount();});
+$('selInvert')?.addEventListener('click',()=>{fileListEl.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=!c.checked);refreshZipBtn();updateSelCount();});
+$('bulkDel')?.addEventListener('click', async()=>{
+  const names=selectedNames(); if(!names.length){toast('请先选择文件','warn');return;}
+  if(!(await modalPrompt({title:'批量删除',body:`确定将 ${names.length} 个文件移入回收站？`,sub:'可在回收站还原',okText:'删除',danger:true}))) return;
+  let ok=0; for(const n of names){ const r=await fetch('/api/files?name='+encodeURIComponent(n)+'&'+authPair(),{method:'DELETE'}); if(r.ok) ok++; }
+  toast(`已移入回收站 ${ok}/${names.length}`,'ok'); loadFiles();
+});
 (function initViewMode(){
   const sel=$('viewMode'); if(!sel) return;
   const saved=localStorage.getItem('fd_view');
@@ -1196,9 +1209,13 @@ if (askList) {
   setInterval(refreshPending, 4000);
 }
 // ---- 键盘快捷键（商业级效率） ----
+function showHelp(){
+  modalPrompt({title:'快捷键 · 帮助', body:'Ctrl+K 搜索  ·  Ctrl+U 上传  ·  ? 帮助  ·  Esc 关闭预览\n\n• 拖拽文件/文件夹到任意位置即可上传\n• 表格 ↔ 卡片视图自动/手动切换\n• 类型筛选 + 批量全选/反选/删除\n• iOS 单并发、鸿蒙/安卓共协议', sub:'FileDrop v1.0 · 精致便携 · 全平台', okText:'知道了', cancelText:'关闭'});
+}
 document.addEventListener('keydown',(e)=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('searchInput')?.focus();}
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='u'){e.preventDefault();$('drop')?.click();}
+  if(e.key==='?' || (e.key==='/' && e.shiftKey)){e.preventDefault();showHelp();}
   if(e.key==='Escape'){const m=$('previewMask');if(m&&m.style.display!=='none') m.style.display='none';}
 });
 // 输入框长度保护
