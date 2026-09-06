@@ -651,7 +651,7 @@ fileListEl.addEventListener('click', async (e) => {
   const p = authPair();
   const tqs = p ? '&' + p : '';
   if (a.dataset.act === 'del') {
-    if (!(await modalPrompt({ title: '删除文件', body: '确定删除「' + name + '」？', sub: '此操作不可恢复。', okText: '删除', cancelText: '取消', danger: true }))) return;
+    if (!(await modalPrompt({ title: '删除文件', body: '确定删除「' + name + '」？', sub: '将移入回收站，可在下方还原。', okText: '移入回收站', cancelText: '取消', danger: true }))) return;
     const r = await fetch('/api/files?name=' + encodeURIComponent(name) + tqs, { method: 'DELETE' });
     if (r.ok) loadFiles();
     else { const j = await r.json().catch(() => ({})); toast('删除失败：' + (j.error || r.status), 'err'); }
@@ -683,6 +683,48 @@ fileListEl.addEventListener('click', async (e) => {
     }catch(err){ toast('下载失败：'+err,'err'); }
   }
 });
+
+// ---- 回收站 ----
+async function loadTrash(){
+  const el=$('trashList'), cnt=$('trashCount'), act=$('trashActions');
+  if(!el) return;
+  try{
+    const r=await fetch('/api/trash');
+    const list=await r.json();
+    if(!list.length){ el.innerHTML='<div class="hint">回收站为空</div>'; if(cnt) cnt.textContent=''; if(act) act.style.display='none'; return; }
+    if(cnt) cnt.textContent=list.length+' 项';
+    if(act) act.style.display='';
+    let html='<div style="display:flex;flex-direction:column;gap:6px">';
+    for(const t of list){ html+='<div style="display:flex;gap:8px;align-items:center;border:1px solid var(--border);border-radius:10px;padding:7px 10px;background:var(--card)"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(t.orig)+'</span><span class="hint">'+fmtSize(t.size)+'</span><a href="#" class="dl" data-trash="restore" data-name="'+escapeHtml(t.trashName)+'">还原</a></div>'; }
+    html+='</div>'; el.innerHTML=html;
+  }catch(e){ el.innerHTML='<div class="hint">加载失败</div>'; }
+}
+$('trashToggle')?.addEventListener('click', async()=>{
+  const el=$('trashList'); if(!el) return;
+  const show=el.style.display==='none'; el.style.display=show?'':'none';
+  $('trashActions').style.display=show && el.innerHTML.includes('data-trash')?'':'none';
+  if(show) await loadTrash();
+});
+$('trashEmpty')?.addEventListener('click', async()=>{
+  if(!(await modalPrompt({title:'清空回收站',body:'确定清空回收站？',sub:'此操作不可恢复',okText:'清空',danger:true}))) return;
+  const r=await fetch('/api/trash/empty?'+authPair(),{method:'POST'});
+  if(r.ok){ toast('已清空','ok'); loadTrash(); loadFiles(); } else toast('清空失败','err');
+});
+$('trashList')?.addEventListener('click', async(e)=>{
+  const a=e.target.closest('a[data-trash="restore"]'); if(!a) return; e.preventDefault();
+  const tn=a.dataset.name; const r=await fetch('/api/trash/restore?name='+encodeURIComponent(tn)+'&'+authPair(),{method:'POST'});
+  const j=await r.json().catch(()=>({})); if(r.ok){ toast('已还原','ok'); loadTrash(); loadFiles(); } else toast('还原失败：'+(j.error||r.status),'err');
+});
+// 删除后刷新回收站
+const _origDeleteFetch = window.fetch;
+fileListEl.addEventListener('click', async (e)=>{ /* 占位以确保回收站在删除后刷新 */ });
+fileListEl.addEventListener('click', ()=>{ setTimeout(loadTrash, 800); });
+
+// hook del success to reload trash (via mutation observer on fileList)
+(() => {
+  const origLoad = loadFiles;
+  window.loadFiles = async function(){ await origLoad(); loadTrash(); };
+})();
 
 function inputModal(title, body, defVal){
   return new Promise((resolve)=>{

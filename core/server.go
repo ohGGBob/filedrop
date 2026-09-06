@@ -236,11 +236,17 @@ func (s *Server) Shutdown() error {
 	return nil
 }
 
-// ---------- 路由 ----------
+	// ---------- 路由 ----------
 func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/health":
 		jsonOK(w, map[string]any{"ok": true, "version": Version, "uptime_ms": time.Since(startTime).Milliseconds()})
+	case "/api/trash":
+		s.trashHandler(w, r)
+	case "/api/trash/restore":
+		s.trashRestoreHandler(w, r)
+	case "/api/trash/empty":
+		s.trashEmptyHandler(w, r)
 	case "/api/info":
 		jsonOK(w, map[string]any{"ip": s.ip, "port": s.Port, "url": s.URL(), "version": Version})
 	case "/api/files":
@@ -385,6 +391,9 @@ func (s *Server) listFiles(w http.ResponseWriter) {
 		if b, err := os.ReadFile(p + ".sha256"); err == nil {
 			rec["sha256"] = strings.TrimSpace(string(b))
 		}
+		if strings.HasPrefix(rel, ".trash/") || rel == ".trash" {
+			return nil
+		}
 		out = append(out, rec)
 		return nil
 	})
@@ -400,7 +409,7 @@ func (s *Server) listFiles(w http.ResponseWriter) {
 	jsonOK(w, out)
 }
 
-// deleteFile 删除接收目录中的文件及其附属清单 / 残留分块。
+// deleteFile 移入回收站而非直接删除
 func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 	if !s.canWrite(r) {
 		jsonErr(w, http.StatusForbidden, "token required")
@@ -414,18 +423,139 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := filepath.Join(s.Dir(), name)
-	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-		jsonErr(w, http.StatusInternalServerError, "remove")
+	if _, err := os.Stat(p); err != nil {
+		if os.IsNotExist(err) {
+			jsonErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		jsonErr(w, http.StatusInternalServerError, "stat")
 		return
 	}
-	_ = os.Remove(p + ".sha256")
-	// 残留分块文件名形如 <name>.<size>.part，需要按前缀匹配清理（连带位图）
-	if _, err := s.purgePartialsLocked(name); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "purge partials")
+	trash := filepath.Join(s.Dir(), ".trash")
+	_ = os.MkdirAll(trash, 0o755)
+	enc := strings.ReplaceAll(name, "/", "__")
+	trashName := fmt.Sprintf("%d__%s", time.Now().UnixMilli(), enc)
+	tp := filepath.Join(trash, trashName)
+	if err := os.Rename(p, tp); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "trash move")
 		return
+	}
+	_ = os.Rename(p+".sha256", tp+".sha256")
+	// 同时写回原路径元信息，供还原时解析（若文件名含 __ 则需元文件兜底）
+	_ = os.WriteFile(tp+".orig", []byte(name), 0o644)
+	if _, err := s.purgePartialsLocked(name); err != nil {
+		// 非致命
 	}
 	s.hub.broadcast(map[string]any{"type": "files"})
-	jsonOK(w, map[string]any{"ok": true})
+	jsonOK(w, map[string]any{"ok": true, "trash": trashName})
+}
+
+func (s *Server) trashDir() string { return filepath.Join(s.Dir(), ".trash") }
+
+func (s *Server) trashHandler(w http.ResponseWriter, r *http.Request) {
+	out := []map[string]any{}
+	dir := s.trashDir()
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() || strings.HasSuffix(e.Name(), ".sha256") || strings.HasSuffix(e.Name(), ".orig") {
+				continue
+			}
+			fi, _ := e.Info()
+			orig := ""
+			if b, err := os.ReadFile(filepath.Join(dir, e.Name()+".orig")); err == nil {
+				orig = strings.TrimSpace(string(b))
+			} else {
+				// 兼容旧命名：去掉时间前缀取剩余
+				if idx := strings.Index(e.Name(), "__"); idx >= 0 {
+					orig = strings.ReplaceAll(e.Name()[idx+2:], "__", "/")
+				} else {
+					orig = e.Name()
+				}
+			}
+			rec := map[string]any{"trashName": e.Name(), "orig": orig, "size": fi.Size(), "mtime": fi.ModTime().UnixMilli()}
+			out = append(out, rec)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i]["mtime"].(int64) > out[j]["mtime"].(int64) })
+	}
+	jsonOK(w, out)
+}
+
+func (s *Server) trashRestoreHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		jsonErr(w, http.StatusBadRequest, "bad params")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := s.trashDir()
+	tp := filepath.Join(dir, name)
+	if _, err := os.Stat(tp); err != nil {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	orig := ""
+	if b, err := os.ReadFile(tp + ".orig"); err == nil {
+		orig = strings.TrimSpace(string(b))
+	} else if idx := strings.Index(name, "__"); idx >= 0 {
+		orig = strings.ReplaceAll(name[idx+2:], "__", "/")
+	}
+	if orig == "" {
+		orig = name
+	}
+	orig = safeRelPath(orig)
+	if orig == "" {
+		orig = safeName(name)
+		if orig == "" {
+			orig = name
+		}
+	}
+	dest := filepath.Join(s.Dir(), orig)
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+	// 若目标已存在，按 unique 逻辑避让
+	if _, err := os.Stat(dest); err == nil {
+		ext := filepath.Ext(orig)
+		stem := strings.TrimSuffix(orig, ext)
+		for i := 1; i < 999; i++ {
+			cand := fmt.Sprintf("%s (%d)%s", stem, i, ext)
+			cp := filepath.Join(s.Dir(), cand)
+			if _, err := os.Stat(cp); err != nil {
+				dest = cp
+				break
+			}
+		}
+	}
+	if err := os.Rename(tp, dest); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "restore")
+		return
+	}
+	_ = os.Rename(tp+".sha256", dest+".sha256")
+	_ = os.Remove(tp + ".orig")
+	s.hub.broadcast(map[string]any{"type": "files"})
+	jsonOK(w, map[string]any{"ok": true, "restored": orig})
+}
+
+func (s *Server) trashEmptyHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := s.trashDir()
+	entries, _ := os.ReadDir(dir)
+	n := 0
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+		n++
+	}
+	s.hub.broadcast(map[string]any{"type": "files"})
+	jsonOK(w, map[string]any{"ok": true, "removed": n})
 }
 
 // renameFile 重命名已接收文件（含 SHA-256 清单同步迁移）。
