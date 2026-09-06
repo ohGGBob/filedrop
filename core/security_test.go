@@ -249,7 +249,7 @@ func TestDirSwitchIsRaceFree(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 200; j++ {
 				rec := httptest.NewRecorder()
-				srv.listFiles(rec)
+				srv.listFiles(rec, httptest.NewRequest(http.MethodGet, "/api/files", nil))
 				_ = srv.Dir()
 			}
 		}()

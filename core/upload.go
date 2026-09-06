@@ -209,7 +209,7 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 		// 服务端默认继续走位图（等价于"共存"），complete 里同名不同内容会自动改名。
 		jsonOK(w, map[string]any{
 			"received": 0, "total": chunkCount(size), "chunkSize": chunkSize,
-			"missing": missingChunks(loadBitmap(dir, name, size)),
+			"missing":  missingChunks(loadBitmap(dir, name, size)),
 			"complete": false, "exists": true, "name": name,
 		})
 		return
@@ -379,18 +379,6 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 覆盖模式：把同名旧文件连同清单一起清掉，下面的 uniqueTarget 就会直接用原名
-	if q.Get("mode") == "overwrite" {
-		old := filepath.Join(dir, name)
-		if _, err := os.Stat(old); err == nil {
-			if err := os.Remove(old); err != nil {
-				jsonErr(w, http.StatusInternalServerError, "overwrite remove old: "+err.Error())
-				return
-			}
-			_ = os.Remove(old + ".sha256")
-		}
-	}
-
 	part := partPath(dir, name, size)
 	// 规整到精确大小（末块可能与 8MiB 不对齐 / 稀疏写入造成的超长）
 	if fi, err := os.Stat(part); err != nil {
@@ -428,6 +416,19 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "mkdir")
 		return
 	}
+	// 覆盖模式：校验全部完成后，再用新文件替换同名旧文件（含清单）。
+	// 注意：删除必须放在 shaOf(part) 成功之后——先删旧文件再算哈希，若哈希失败会同时丢旧文件与新文件。
+	if q.Get("mode") == "overwrite" {
+		old := filepath.Join(dir, name)
+		if _, err := os.Stat(old); err == nil {
+			if err := os.Remove(old); err != nil {
+				jsonErr(w, http.StatusInternalServerError, "overwrite remove old: "+err.Error())
+				return
+			}
+			_ = os.Remove(old + ".sha256")
+		}
+	}
+
 	final, finalName, reused := uniqueTarget(dir, name, sum, size)
 	if reused {
 		// 内容完全一样：留旧删新，别把几 GB 的重复数据留在盘上

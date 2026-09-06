@@ -119,12 +119,16 @@ jobs:
               -PversionName=${{ steps.ver.outputs.version }} \
               -PversionCode=${{ steps.ver.outputs.vcode }} \
               assembleRelease --no-daemon 2>&1 | tee gradle.log; then
-            {
-              echo "### gradle 失败日志"
-              echo '```'
-              tail -c 20000 gradle.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            # ::error:: 会变成 check-run annotation，匿名 API 可读（step summary 匿名读不到）
+            grep -aE "^e: |error:|What went wrong|Execution failed|FAILURE: Build" gradle.log | tail -15 | while IFS= read -r l; do
+              echo "::error::${l:0:400}"
+            done
+            # 完整日志推到 ci-logs 分支，匿名可读 raw 文件
+            git config user.name "ci-bot" && git config user.email "ci-bot@users.noreply.github.com"
+            git checkout -B ci-logs
+            git add -f gradle.log
+            git commit -m "gradle log for ${GITHUB_SHA}"
+            git push -f origin ci-logs
             exit 1
           fi
 

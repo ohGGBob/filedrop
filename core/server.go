@@ -7,12 +7,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -163,7 +165,32 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/", s.apiHandler)
 	mux.Handle("/", s.fileServer())
-	return s.withRateLimit(mux)
+	return s.withLogging(s.withRateLimit(mux))
+}
+
+// withLogging 记录每个 API 请求的 远端地址/方法/路径/状态码/耗时。
+// 高频分块与长连接(SSE)不逐条打，避免 4GB 文件产生数百行刷屏。
+func (s *Server) withLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/upload/chunk" || r.URL.Path == "/api/events" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		log.Printf("%s %s %s %d %s", peerIP(r), r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 // ---------- 限流 ----------
@@ -236,7 +263,7 @@ func (s *Server) Shutdown() error {
 	return nil
 }
 
-	// ---------- 路由 ----------
+// ---------- 路由 ----------
 func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/health":
@@ -255,7 +282,7 @@ func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete || r.Method == http.MethodPost && r.URL.Query().Has("delete") {
 			s.deleteFile(w, r)
 		} else {
-			s.listFiles(w)
+			s.listFiles(w, r)
 		}
 	case "/api/rename":
 		s.renameFile(w, r)
@@ -338,10 +365,10 @@ func (s *Server) canWrite(r *http.Request) bool {
 		return true
 	}
 	// 兼容 Header 令牌，避免 URL 明文落历史/日志；查询参数仍保留以兼容二维码
-	if t := r.Header.Get("X-FileDrop-Token"); t != "" && t == s.token {
+	if t := r.Header.Get("X-FileDrop-Token"); t != "" && subtle.ConstantTimeCompare([]byte(t), []byte(s.token)) == 1 {
 		return true
 	}
-	if t := r.URL.Query().Get("t"); t != "" && t == s.token {
+	if t := r.URL.Query().Get("t"); t != "" && subtle.ConstantTimeCompare([]byte(t), []byte(s.token)) == 1 {
 		return true
 	}
 	// 对端批准过的临时授权：绑来源 IP 且会过期，比终身有效的配对令牌收敛。
@@ -364,7 +391,12 @@ func isLoopback(r *http.Request) bool {
 }
 
 // ---------- 接口实现 ----------
-func (s *Server) listFiles(w http.ResponseWriter) {
+func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
+	// 列目录 = 读取本机收到的一切文件，和写操作同等敏感，必须鉴权
+	if !s.canWrite(r) {
+		jsonErr(w, http.StatusForbidden, "token required")
+		return
+	}
 	dir := s.Dir()
 	out := make([]map[string]any, 0, 64)
 	// 递归列出（文件夹上传会把文件放进子目录）；name 一律是接收目录内的相对路径
@@ -634,6 +666,10 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
+	if !s.canWrite(r) {
+		http.Error(w, "token required", http.StatusUnauthorized)
+		return
+	}
 	name := safeRelPath(r.URL.Query().Get("name"))
 	if name == "" {
 		http.Error(w, "invalid file name", http.StatusBadRequest)
@@ -660,6 +696,10 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 // 不落盘、全程写响应流；大文件用 Store（不压缩）——照片视频本来就压不动，
 // 省下的 CPU 全部变成传输速度。zip64 由标准库按需启用，单文件 >4GB 也没问题。
 func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.canWrite(r) {
+		http.Error(w, "token required", http.StatusUnauthorized)
+		return
+	}
 	var names []string
 	for _, n := range strings.Split(r.URL.Query().Get("names"), ",") {
 		if n = safeRelPath(strings.TrimSpace(n)); n != "" {
