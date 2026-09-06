@@ -1240,3 +1240,9 @@ async function checkUpdate(){
   }catch(_){}
 }
 setTimeout(checkUpdate, 1800);
+// PWA Service Worker 注册（离线缓存静态资源，API 网络优先）
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  });
+}
