@@ -15,18 +15,25 @@
 - 主机可以是电脑（双击 exe），也可以是手机（打开 App）；不装 App 的设备用浏览器扫码即可
 - 设备基本在同一局域网；跨网场景暂需额外打洞/中继（后续做）
 
-## 下载安装（GitHub Releases）
+## 全平台下载（GitHub Releases）
 到 [Releases](https://github.com/ohGGBob/filedrop/releases/latest) 下载：
 
-| 平台 | 文件 | 用法 |
+| 系统 | 文件 | 说明 |
 | --- | --- | --- |
-| Windows | `filedrop-tray.exe` | 双击运行（托盘图标，推荐） |
-| Windows | `filedrop.exe` | 双击运行（无界面版，控制台打印地址） |
-| Android | `filedrop-android.apk` | 安装后打开即用（允许「未知来源应用」） |
+| Windows | `filedrop-tray.exe` | 托盘版（推荐），任务栏常驻 |
+| Windows | `filedrop.exe` | 无界面版，控制台打印地址 |
+| macOS | `FileDrop.app` / `FileDrop.dmg` | 双击运行，状态栏常驻（`scripts/build-macos.sh` 可自建） |
+| Android | `filedrop-android.apk` | 需允许未知来源 |
+| iOS | 无需安装 | 用 Safari 打开二维码地址即可（PWA 可添加到主屏幕） |
+| HarmonyOS | `entry` | DevEco 打开 `harmony/` 构建，WebView 复用同一 Go 内核 |
+| 任意 | 浏览器 | 同 WiFi 下扫码即用，零安装 |
 
-- 首次运行 Windows 版会被 SmartScreen 拦一下（未做代码签名），点「更多信息 → 仍要运行」。
-- Android 端下载的文件保存在 `下载/FileDrop/`；接收目录默认 App 私有目录，可在页面里改。
-- 每次发布由 GitHub Actions 自动构建：Windows 双 exe + 安卓 APK（gomobile 编译内嵌 Go 服务端 + WebView 壳）。
+> **精致版 1.0**：玻璃拟态 Hero、全屏拖拽蒙层、卡片瀑布、骨架屏、iOS 安全区、鸿蒙壳已就绪。
+
+- Windows 首次运行被 SmartScreen 拦：点「更多信息 → 仍要运行」。
+- macOS 首次运行：右键 → 打开 绕过 Gatekeeper；或 `xattr -dr com.apple.quarantine FileDrop.app`
+- iOS 提示：大文件建议单路上传（自动降为1并发），下载走系统分享/文件 App
+- Android/Harmony：下载在 `下载/FileDrop/`，接收目录可在页面里改
 
 ## 目录结构
 ```
@@ -41,16 +48,19 @@ filedrop/
 │   ├── settings.go    # 接收目录持久化、打开/选择文件夹
 │   └── web/           # 前端（原生 JS），通过 go:embed 编进二进制
 ├── tray/
-│   └── main.go        # Windows 托盘入口（自包含，内嵌服务端）
+│   └── main.go        # 托盘入口（Windows+macOS，自包含，内嵌服务端；win/darwin 双构建）
+├── scripts/
+│   └── build-macos.sh # 一键生成 FileDrop.app / DMG
 ├── mobile/
-│   └── mobile.go      # gobind 桥接：Start/Stop，供安卓 App 启动内嵌服务端
-├── android/           # 安卓壳工程（Kotlin + WebView，gomobile bind 出的 .aar 由 CI 生成）
+│   └── mobile.go      # gobind 桥接：Start/Stop，供安卓/鸿蒙启动内嵌服务端
+├── android/           # 安卓壳（Kotlin+WebView）
+├── harmony/           # 鸿蒙壳（ArkTS Stage + WebView，复用同一 Go 内核）
 ├── testclient/        # 自测客户端（分块协议参考实现）
 ├── received/          # 接收文件落盘目录（运行时在 exe 旁自动创建）
-├── filedrop.exe       # 单文件成品（前端已内嵌，拷到哪都能跑）
-├── filedrop-tray.exe  # 单文件托盘版
+├── filedrop.exe       # 单文件成品
+├── filedrop-tray.exe  # 托盘版（Win）/ FileDrop.app（Mac）
 ├── go.mod / go.sum
-└── PROTOCOL.md        # 前后端传输协议契约
+└── PROTOCOL.md        # 协议契约
 ```
 
 > **单文件成品**：前端通过 `go:embed` 编译进二进制，两个 exe 都不依赖外部的 `web/` 目录，
@@ -128,8 +138,8 @@ dd if=/dev/urandom of=big.bin bs=1M count=4096
 go run ./testclient up http://127.0.0.1:28099 "$TOKEN" big.bin
 ```
 
-## 已知限制
-- **iOS Safari** 对大文件（`File.slice` 上传）限制较多；当前目标为 Android，iOS 待适配。
+## 已知限制（1.0 已大幅缓解）
+- **iOS Safari** 已适配：单并发上传、blob+share 下载兜底、安全区与触控卡片视图，但超大文件仍受 Safari 内存限制。
 - 配对令牌是**弱防护**（同网设备拿到页面即可读取），仅防误传，非安全边界。
   唯一例外是便签：读写一律要令牌。
 - 暂不支持设备间直接 P2P（手机↔平板需经电脑中转）；跨网需另加中继/穿透。
