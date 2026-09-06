@@ -214,12 +214,22 @@ function showPreview(name){
   const mask=$('previewMask'), body=$('previewBody'), title=$('previewTitle');
   if(!mask) return; title.textContent=name; body.textContent='加载中…'; mask.style.display='flex';
   const url='/api/download?name='+encodeURIComponent(name);
-  if(/\.(jpg|jpeg|png|gif|webp)$/i.test(name)){body.innerHTML='<img src="'+url+'" style="max-width:100%;border-radius:10px;border:1px solid var(--border)" />';}
-  else if(/\.(mp4|mov|webm)$/i.test(name)){body.innerHTML='<video src="'+url+'" controls style="max-width:100%;border-radius:10px"></video>';}
-  else if(/\.pdf$/i.test(name)){body.innerHTML='<iframe src="'+url+'" style="width:100%;height:55vh;border:1px solid var(--border);border-radius:10px"></iframe>';}
-  else { fetch(url).then(r=>r.text()).then(t=>{body.innerHTML='<pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:10px;border-radius:10px;border:1px solid var(--border);max-height:55vh;overflow:auto">'+escapeHtml(t.slice(0,200000))+'</pre>'}).catch(()=>body.textContent='预览失败');}
+  if(/\.(jpg|jpeg|png|gif|webp)$/i.test(name)){body.innerHTML='<img src="'+url+'" style="max-width:100%;border-radius:10px;border:1px solid var(--border);cursor:zoom-in;transition:.2s" onclick="this.style.transform=this.style.transform?\'\':\'scale(1.7)\';this.style.cursor=this.style.transform?\'zoom-out\':\'zoom-in\'" title="点击缩放" />';}
+  else if(/\.(mp4|mov|webm)$/i.test(name)){body.innerHTML='<video src="'+url+'" controls autoplay style="max-width:100%;border-radius:10px"></video>';}
+  else if(/\.pdf$/i.test(name)){body.innerHTML='<iframe src="'+url+'" style="width:100%;height:62vh;border:1px solid var(--border);border-radius:10px"></iframe>';}
+  else { fetch(url).then(r=>r.text()).then(t=>{const esc=escapeHtml(t.slice(0,200000)); const lang=/\.(js|ts|py|go|java|json|html|css)/i.test(name)?' style="background:#0f172a;color:#e2e8f0"':''; body.innerHTML='<pre'+lang+' style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:12px;border-radius:10px;border:1px solid var(--border);max-height:62vh;overflow:auto;font-size:12.5px;line-height:1.6">'+esc+'</pre>'}).catch(()=>body.textContent='预览失败');}
 }
 function updateSelCount(){ const c=selectedNames().length; const el=$('selCount'); if(el) el.textContent=c?`已选 ${c} 项`:''; }
+function updateStats(){
+  const files=allFiles.length;
+  const size=allFiles.reduce((s,f)=>s+f.size,0);
+  const fav=getFavSet().size;
+  $('statFiles') && ($('statFiles').textContent=String(files));
+  $('statSize') && ($('statSize').textContent=fmtSize(size));
+  $('statFav') && ($('statFav').textContent=String(fav));
+  // trash count async
+  fetch('/api/trash').then(r=>r.json()).then(list=>{ $('statTrash') && ($('statTrash').textContent=String(list.length)); }).catch(()=>{});
+}
 function renderFiles(){
   let list=[...allFiles];
   if(curSearch) {const k=curSearch.toLowerCase(); list=list.filter(f=>f.name.toLowerCase().includes(k));}
@@ -237,7 +247,7 @@ function renderFiles(){
   const slice=list.slice((curPage-1)*PAGE_SIZE, curPage*PAGE_SIZE);
   const cntEl=$('fileCount'); if(cntEl) cntEl.textContent=total?`共 ${total} 个 · 第 ${curPage}/${pages} 页`:'';
   const pager=$('filePager'); if(pager){pager.style.display=total>PAGE_SIZE?'':'none'; pager.textContent=''; for(let i=1;i<=pages;i++){const b=document.createElement('button');b.textContent=String(i);if(i===curPage)b.className='cur';b.addEventListener('click',()=>{curPage=i;renderFiles()});pager.appendChild(b);} }
-  if(!slice.length){ fileListEl.innerHTML='<div class="empty"><div class="illus">∅</div><div>'+(curSearch?'无匹配结果':'还没有文件 — 拖拽或点击上传')+'</div><div class="hint">支持图片/视频/文档预览，长按卡片可多选</div></div>'; if(zipSelBtn) zipSelBtn.style.display='none'; return; }
+  if(!slice.length){ fileListEl.innerHTML='<div class="empty"><div class="illus">∅</div><div>'+(curSearch?'无匹配结果':'还没有文件 — 拖拽或点击上传')+'</div><div class="hint">支持图片/视频/文档预览，长按卡片可多选</div></div>'; if(zipSelBtn) zipSelBtn.style.display='none'; updateStats(); return; }
   const vm=$('viewMode')?.value || 'auto';
   const useCards = vm==='cards' || (vm==='auto' && (window.innerWidth<720 || isIOS));
   const prefix=getPrefix();
@@ -258,7 +268,7 @@ function renderFiles(){
     }
     html+='</tbody></table>'; fileListEl.innerHTML=html;
   }
-  refreshZipBtn();
+  refreshZipBtn(); updateStats();
 }
 async function loadFiles() {
   try {
