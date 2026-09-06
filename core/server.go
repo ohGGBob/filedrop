@@ -247,6 +247,8 @@ func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		s.trashRestoreHandler(w, r)
 	case "/api/trash/empty":
 		s.trashEmptyHandler(w, r)
+	case "/api/history":
+		s.historyHandler(w, r)
 	case "/api/info":
 		jsonOK(w, map[string]any{"ip": s.ip, "port": s.Port, "url": s.URL(), "version": Version})
 	case "/api/files":
@@ -391,7 +393,7 @@ func (s *Server) listFiles(w http.ResponseWriter) {
 		if b, err := os.ReadFile(p + ".sha256"); err == nil {
 			rec["sha256"] = strings.TrimSpace(string(b))
 		}
-		if strings.HasPrefix(rel, ".trash/") || rel == ".trash" {
+		if strings.HasPrefix(rel, ".trash/") || rel == ".trash" || strings.HasPrefix(rel, ".history/") || rel == ".history" {
 			return nil
 		}
 		out = append(out, rec)
@@ -556,6 +558,33 @@ func (s *Server) trashEmptyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.broadcast(map[string]any{"type": "files"})
 	jsonOK(w, map[string]any{"ok": true, "removed": n})
+}
+
+func (s *Server) historyHandler(w http.ResponseWriter, r *http.Request) {
+	name := safeRelPath(r.URL.Query().Get("name"))
+	if name == "" {
+		jsonErr(w, http.StatusBadRequest, "bad name")
+		return
+	}
+	dir := filepath.Join(s.Dir(), ".history", filepath.Dir(name))
+	base := filepath.Base(name)
+	entries, _ := os.ReadDir(dir)
+	out := []map[string]any{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if !strings.Contains(e.Name(), base) {
+			continue
+		}
+		if strings.HasSuffix(e.Name(), ".sha256") {
+			continue
+		}
+		fi, _ := e.Info()
+		out = append(out, map[string]any{"name": e.Name(), "size": fi.Size(), "mtime": fi.ModTime().UnixMilli()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i]["mtime"].(int64) > out[j]["mtime"].(int64) })
+	jsonOK(w, out)
 }
 
 // renameFile 重命名已接收文件（含 SHA-256 清单同步迁移）。

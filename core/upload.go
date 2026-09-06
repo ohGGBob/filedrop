@@ -411,6 +411,18 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "hash failed")
 		return
 	}
+	// 若存在旧版本且内容不同，先归档到 .history（商业版可追溯）
+	if fi, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		oldSum := sidecarSha(filepath.Join(dir, name))
+		if oldSum == "" {
+			oldSum = shaOf(filepath.Join(dir, name))
+		}
+		if oldSum != "" && oldSum != sum {
+			_ = saveHistory(dir, name)
+		} else if fi.Size() != size {
+			_ = saveHistory(dir, name)
+		}
+	}
 	// 共存落盘时目标可能在子目录里，确保目录已存在
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "mkdir")
@@ -432,6 +444,34 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 
 	s.hub.broadcast(map[string]any{"type": "files"})
 	jsonOK(w, map[string]any{"sha256": sum, "name": finalName, "reused": reused})
+}
+
+func saveHistory(dir, name string) error {
+	hDir := filepath.Join(dir, ".history", filepath.Dir(name))
+	if err := os.MkdirAll(hDir, 0o755); err != nil {
+		return err
+	}
+	src := filepath.Join(dir, name)
+	dst := filepath.Join(hDir, fmt.Sprintf("%d__%s", time.Now().UnixMilli(), filepath.Base(name)))
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	_ = out.Close()
+	// 同时归档 sha
+	if b, err := os.ReadFile(src + ".sha256"); err == nil {
+		_ = os.WriteFile(dst+".sha256", b, 0o644)
+	}
+	return nil
 }
 
 // ---------- 中断残留 ----------

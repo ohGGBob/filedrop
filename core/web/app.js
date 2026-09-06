@@ -256,7 +256,7 @@ function renderFiles(){
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
       const star=isFav(f.name)?'⭐':'☆';
-      html+='<div class="fcard'+(isDup(f)?' dup':'')+'"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+(isDup(f)?'<span class="dup-badge">重复</span>':'')+'</div><button data-act="fav" data-name="'+escapeHtml(f.name)+'" style="background:none;border:none;cursor:pointer;font-size:14px" title="收藏">'+star+'</button><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
+      html+='<div class="fcard'+(isDup(f)?' dup':'')+'"><div class="top"><div class="fico">'+fileIcon(f.name)+'</div><div class="fname" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+(isDup(f)?'<span class="dup-badge">重复</span>':'')+'</div><button data-act="fav" data-name="'+escapeHtml(f.name)+'" style="background:none;border:none;cursor:pointer;font-size:14px" title="收藏">'+star+'</button><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></div><div class="fmeta">'+fmtSize(f.size)+' · '+new Date(f.mtime).toLocaleString()+'</div><div class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a>'+(isPreviewable(f.name)?' · <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+' · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></div></div>';
     }
     html+='</div>'; fileListEl.innerHTML=html;
   } else {
@@ -264,7 +264,7 @@ function renderFiles(){
     for(const f of slice){
       const enc=encodeURIComponent(f.name); const dlName=prefix+(f.name.split('/').pop());
       const star=isFav(f.name)?'⭐':'☆';
-      html+='<tr'+(isDup(f)?' style="background:color-mix(in srgb,var(--warn) 6%, transparent)"':'')+'><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><a href="#" data-act="fav" data-name="'+escapeHtml(f.name)+'" style="text-decoration:none;margin-right:4px">'+star+'</a><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isDup(f)?'<span class="dup-badge">重复</span>':'')+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
+      html+='<tr'+(isDup(f)?' style="background:color-mix(in srgb,var(--warn) 6%, transparent)"':'')+'><td><input type="checkbox" data-name="'+escapeHtml(f.name)+'" /></td><td><a href="#" data-act="fav" data-name="'+escapeHtml(f.name)+'" style="text-decoration:none;margin-right:4px">'+star+'</a><span style="margin-right:6px">'+fileIcon(f.name)+'</span><span>'+escapeHtml(f.name)+'</span>'+(isDup(f)?'<span class="dup-badge">重复</span>':'')+(isPreviewable(f.name)?' <a href="#" class="dl" data-act="preview" data-name="'+escapeHtml(f.name)+'">预览</a>':'')+'</td><td class="size">'+fmtSize(f.size)+'</td><td class="file-actions"><a class="dl" href="/api/download?name='+enc+'" download="'+escapeHtml(dlName)+'" data-act="dl" data-name="'+escapeHtml(f.name)+'">下载</a> · <a href="#" class="dl" data-act="rename" data-name="'+escapeHtml(f.name)+'">重命名</a> · <a href="#" class="dl" data-act="history" data-name="'+escapeHtml(f.name)+'">历史</a> · <a href="#" class="dl" data-act="del" data-name="'+escapeHtml(f.name)+'">删除</a></td></tr>';
     }
     html+='</tbody></table>'; fileListEl.innerHTML=html;
   }
@@ -762,6 +762,19 @@ fileListEl.addEventListener('click', async (e) => {
     showPreview(name);
   } else if (a.dataset.act === 'fav') {
     toggleFav(name);
+  } else if (a.dataset.act === 'history') {
+    try{
+      const r=await fetch('/api/history?name='+encodeURIComponent(name));
+      const list=await r.json();
+      if(!list.length) { toast('暂无历史版本','info'); return; }
+      let html='<div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow:auto">';
+      for(const h of list){ html+='<div style="display:flex;gap:8px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:6px 8px"><span style="flex:1">'+escapeHtml(h.name)+'</span><span class="hint">'+fmtSize(h.size)+' · '+new Date(h.mtime).toLocaleString()+'</span></div>'; }
+      html+='</div>';
+      const mask=document.createElement('div'); mask.className='modal-mask';
+      const box=document.createElement('div'); box.className='modal';
+      box.innerHTML='<h3>历史版本 — '+escapeHtml(name)+'</h3><div style="margin-top:8px">'+html+'</div><div class="mact" style="margin-top:12px"><button class="primary" onclick="this.closest(\'.modal-mask\').remove()">关闭</button></div>';
+      mask.appendChild(box); mask.addEventListener('click', e=>{ if(e.target===mask) mask.remove(); }); document.body.appendChild(mask);
+    }catch(e){ toast('历史加载失败','err'); }
   }
 });
 
