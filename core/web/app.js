@@ -259,6 +259,22 @@ function refreshTagFilter(){
   sel.innerHTML='<option value="">全部标签</option>'+tags.map(t=>'<option value="'+escapeHtml(t)+'">'+escapeHtml(t)+'</option>').join('');
   sel.value=cur;
 }
+const SEARCH_HIST_KEY='fd_search_hist';
+function getSearchHist(){ try{ return JSON.parse(localStorage.getItem(SEARCH_HIST_KEY)||'[]'); }catch(_){ return []; } }
+function addSearchHist(q){
+  q=q.trim(); if(!q || q.length<2) return;
+  let h=getSearchHist(); h=h.filter(x=>x!==q); h.unshift(q); h=h.slice(0,8);
+  localStorage.setItem(SEARCH_HIST_KEY, JSON.stringify(h));
+}
+function renderSearchHist(filter=''){
+  const el=$('searchHistory'); if(!el) return;
+  const hist=getSearchHist();
+  const list=filter? hist.filter(x=>x.toLowerCase().includes(filter.toLowerCase())) : hist;
+  if(!list.length || !filter && document.activeElement!==$('searchInput')){ el.style.display='none'; return; }
+  el.innerHTML=list.map(x=>`<div class="ctx-item" data-hist="${escapeHtml(x)}">🔍 ${escapeHtml(x)}</div>`).join('');
+  el.style.display='block';
+  el.querySelectorAll('[data-hist]').forEach(d=> d.addEventListener('click', ()=>{ $('searchInput').value=d.dataset.hist; curSearch=d.dataset.hist; curPage=1; renderFiles(); el.style.display='none'; }));
+}
 function fileIcon(name){const ext=(name.split('.').pop()||'').toLowerCase();const map={jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',mp4:'🎬',mov:'🎬',avi:'🎬',mkv:'🎬',mp3:'🎵',wav:'🎵',pdf:'📄',zip:'🗜️',rar:'🗜️',docx:'📝',xlsx:'📊',pptx:'📊',txt:'📃'};return map[ext]||'📦'}
 function fileType(name){const ext=(name.split('.').pop()||'').toLowerCase(); if(['jpg','jpeg','png','gif','webp','heic','bmp','svg'].includes(ext)) return 'image'; if(['mp4','mov','avi','mkv','webm','m4v'].includes(ext)) return 'video'; if(['mp3','wav','aac','flac','ogg','m4a'].includes(ext)) return 'audio'; if(['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','md','csv','json','html'].includes(ext)) return 'doc'; if(['zip','rar','7z','tar','gz','bz2'].includes(ext)) return 'archive'; return 'other';}
 function isPreviewable(name){return /\.(jpg|jpeg|png|gif|webp|txt|md|log|json|csv|html|pdf|mp4|mp3)$/i.test(name)}
@@ -360,9 +376,25 @@ async function loadFiles() {
     fileListEl.innerHTML = '<div class="empty">列表加载失败：' + escapeHtml(String(e)) + '</div>';
   }
 }
-$('searchInput')?.addEventListener('input',(e)=>{curSearch=e.target.value;curPage=1;renderFiles()});
-$('sortSelect')?.addEventListener('change',(e)=>{curSort=e.target.value;renderFiles()});
-$('typeFilter')?.addEventListener('change',(e)=>{curType=e.target.value;curPage=1;renderFiles()});
+(() => {
+  const si=$('searchInput');
+  if(si){
+    // 恢复历史筛选记忆
+    try{
+      const f=JSON.parse(localStorage.getItem('fd_filters')||'{}');
+      if(f.search){ si.value=f.search; curSearch=f.search; }
+      if(f.sort){ $('sortSelect').value=f.sort; curSort=f.sort; }
+      if(f.type){ $('typeFilter').value=f.type; curType=f.type; }
+      if(f.tag){ $('tagFilter').value=f.tag; curTag=f.tag; }
+    }catch(_){}
+    si.addEventListener('input', e=>{ curSearch=e.target.value; curPage=1; renderFiles(); renderSearchHist(curSearch); localStorage.setItem('fd_filters', JSON.stringify({search:curSearch, sort:curSort, type:curType, tag:curTag})); });
+    si.addEventListener('focus', ()=> renderSearchHist(si.value));
+    si.addEventListener('blur', ()=> setTimeout(()=>{ if(si.value.trim()) addSearchHist(si.value); const h=$('searchHistory'); if(h) h.style.display='none'; }, 180));
+    si.addEventListener('keydown', e=>{ if(e.key==='Enter'){ addSearchHist(si.value); renderSearchHist(''); } });
+  }
+})();
+$('sortSelect')?.addEventListener('change',(e)=>{curSort=e.target.value; curPage=1; renderFiles(); localStorage.setItem('fd_filters', JSON.stringify({search:curSearch, sort:curSort, type:curType, tag:curTag})); });
+$('typeFilter')?.addEventListener('change',(e)=>{curType=e.target.value;curPage=1;renderFiles(); localStorage.setItem('fd_filters', JSON.stringify({search:curSearch, sort:curSort, type:curType, tag:curTag})); });
 $('selAll')?.addEventListener('click',()=>{fileListEl.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=true);refreshZipBtn();updateSelCount();});
 $('selInvert')?.addEventListener('click',()=>{fileListEl.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=!c.checked);refreshZipBtn();updateSelCount();});
 $('bulkDel')?.addEventListener('click', async()=>{
@@ -379,7 +411,7 @@ $('favFilter')?.addEventListener('click',()=>{
   curFavOnly=!curFavOnly; const b=$('favFilter'); if(b){ b.style.background=curFavOnly?'var(--brand)':''; b.style.color=curFavOnly?'#fff':''; }
   curPage=1; renderFiles(); toast(curFavOnly?'仅显示收藏':'已显示全部','info');
 });
-$('tagFilter')?.addEventListener('change', e=>{ curTag=e.target.value; curPage=1; renderFiles(); });
+$('tagFilter')?.addEventListener('change', e=>{ curTag=e.target.value; curPage=1; renderFiles(); localStorage.setItem('fd_filters', JSON.stringify({search:curSearch, sort:curSort, type:curType, tag:curTag})); });
 $('newFolderBtn')?.addEventListener('click', async()=>{
   const name=await inputModal('新建文件夹','输入文件夹名','');
   if(!name) return;
