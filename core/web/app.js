@@ -1222,6 +1222,18 @@ loadNotes();
 listenEvents();
 renderActivity();
 $('clearActivity')?.addEventListener('click',()=>{ localStorage.removeItem(ACT_KEY); renderActivity(); toast('已清空活动记录','ok'); });
+// 设置抽屉
+(function initDrawer(){
+  const btn=$('settingsBtn'), mask=$('drawerMask'), drawer=$('settingsDrawer'), close=$('drawerClose');
+  const open=()=>{ mask.classList.add('show'); drawer.classList.add('show'); const info=$('drawerInfo'); if(info) info.textContent='版本 '+($('verBadge')?.textContent||'')+' · '+addrEl.textContent+' · '+new Date().toLocaleString(); };
+  const shut=()=>{ mask.classList.remove('show'); drawer.classList.remove('show'); };
+  btn?.addEventListener('click', open); close?.addEventListener('click', shut); mask?.addEventListener('click', shut);
+  $('drawerTheme')?.addEventListener('click',()=> $('themeToggle')?.click());
+  $('drawerLang')?.addEventListener('click',()=> $('langToggle')?.click());
+  $('drawerClearCache')?.addEventListener('click',()=>{ localStorage.removeItem(PREFIX_KEY); localStorage.removeItem(ACT_KEY); toast('已清除本地缓存','ok'); });
+  $('drawerClearTrash')?.addEventListener('click',()=> $('trashEmpty')?.click());
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && drawer.classList.contains('show')) shut(); });
+})();
 
 if (peerListEl) {
   loadPeers();
