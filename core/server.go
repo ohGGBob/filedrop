@@ -38,7 +38,7 @@ var startTime = time.Now()
 
 // Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘 / 安卓 App。
 // CI 会把这里提取的值注入安卓 gradle 的 versionName——改这里，两边一起变。
-const Version = "1.0.2"
+const Version = "1.1.0"
 
 // Server 是一个 FileDrop 实例。
 type Server struct {
