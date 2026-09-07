@@ -1,6 +1,6 @@
-# FileDrop v1.0 · 局域网文件快传 · 便携商业版
+# FileDrop v1.1.0 · 局域网文件快传 · 便携商业版
 
-> **1.0 商业精致版** — 暗色主题 · 搜索/排序/预览 · 头部令牌兼容 · 并发细粒度锁 · 磁盘空间预检 · RateLimit · 品牌托盘图标 · 零拷贝安卓上传
+> **1.1.0 升级版** — 暗色主题 · 搜索/排序/预览 · 头部令牌兼容 · 并发细粒度锁 · 磁盘空间预检 · RateLimit · 品牌托盘图标 · 零拷贝安卓上传 · **安全头部强化 (CSP/X-Frame-Options 等)** · **Go 1.26 + 依赖全面升级**
 
 # FileDrop · 局域网文件快传
 
@@ -28,7 +28,7 @@
 | HarmonyOS | `entry` | DevEco 打开 `harmony/` 构建，WebView 复用同一 Go 内核 |
 | 任意 | 浏览器 | 同 WiFi 下扫码即用，零安装 |
 
-> **精致版 1.0**：玻璃拟态 Hero、全屏拖拽蒙层、卡片瀑布、骨架屏、iOS 安全区、鸿蒙壳已就绪。
+> **精致版 1.1**：玻璃拟态 Hero、全屏拖拽蒙层、卡片瀑布、骨架屏、iOS 安全区、鸿蒙壳已就绪、安全头部强化。
 
 - Windows 首次运行被 SmartScreen 拦：点「更多信息 → 仍要运行」。
 - macOS 首次运行：右键 → 打开 绕过 Gatekeeper；或 `xattr -dr com.apple.quarantine FileDrop.app`

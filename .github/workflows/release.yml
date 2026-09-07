@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.26'
           cache: true
 
       - name: Vet & Test (race)
@@ -60,7 +60,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.26'
           cache: true
 
       - uses: actions/setup-java@v4
@@ -70,8 +70,8 @@ jobs:
 
       - name: Install gomobile & gobind (pinned)
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@d5bb5ecc55c03634c30adcf688f9a2482006dcb0
-          go install golang.org/x/mobile/cmd/gobind@d5bb5ecc55c03634c30adcf688f9a2482006dcb0
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260821190718-4776eadac327
+          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260821190718-4776eadac327
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Setup Android NDK

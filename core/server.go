@@ -165,7 +165,35 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/", s.apiHandler)
 	mux.Handle("/", s.fileServer())
-	return s.withLogging(s.withRateLimit(mux))
+	return s.withSecurityHeaders(s.withLogging(s.withRateLimit(mux)))
+}
+
+// withSecurityHeaders 添加安全相关的 HTTP 响应头。
+func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// CSP: 限制资源加载来源，防止 XSS
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; "+
+				"font-src 'self'; "+
+				"connect-src 'self'; "+
+				"frame-ancestors 'none'; "+
+				"base-uri 'self'; "+
+				"form-action 'self'")
+		// 防止 MIME 类型嗅探
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// 防止点击劫持
+		w.Header().Set("X-Frame-Options", "DENY")
+		// XSS 保护（旧浏览器）
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		// Referrer 策略
+		w.Header().Set("Referrer-Policy", "same-origin")
+		// 权限策略
+		w.Header().Set("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withLogging 记录每个 API 请求的 远端地址/方法/路径/状态码/耗时。
