@@ -38,7 +38,7 @@ var startTime = time.Now()
 
 // Version 是当前程序版本，随 /api/info 返回并展示在界面 / 托盘 / 安卓 App。
 // CI 会把这里提取的值注入安卓 gradle 的 versionName——改这里，两边一起变。
-const Version = "1.1.0"
+const Version = "1.1.1"
 
 // Server 是一个 FileDrop 实例。
 type Server struct {
@@ -171,14 +171,20 @@ func (s *Server) Handler() http.Handler {
 // withSecurityHeaders 添加安全相关的 HTTP 响应头。
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// CSP: 限制资源加载来源，防止 XSS
+		// CSP: 限制资源加载来源，防止 XSS。
+		// 注意两处前端真实依赖，收紧时别误伤：
+		//  1. app.js 的 checkUpdate() 会 fetch https://api.github.com 查新版本，
+		//     connect-src 必须放行该域名，否则更新横幅永不出现；
+		//  2. iOS 下载 / 便签导出用 URL.createObjectURL 生成 blob: 链接，
+		//     img-src / media-src 必须放行 blob:。
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
 				"script-src 'self' 'unsafe-inline'; "+
 				"style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data:; "+
+				"img-src 'self' data: blob:; "+
+				"media-src 'self' blob:; "+
 				"font-src 'self'; "+
-				"connect-src 'self'; "+
+				"connect-src 'self' https://api.github.com; "+
 				"frame-ancestors 'none'; "+
 				"base-uri 'self'; "+
 				"form-action 'self'")
